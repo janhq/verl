@@ -118,6 +118,13 @@ class ActorRolloutRefWorker(ARRWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
     def sync_rollout_weights(self):
+        import psutil
+        import time as time_module
+        
+        # Measure network I/O before sync
+        net_io_start = psutil.net_io_counters()
+        time_start = time_module.time()
+        
         assert (self._is_actor or self._is_rollout) and not self.config.hybrid_engine
         assert hasattr(self, "_weights_info") and self._weights_info is not None
         
@@ -190,6 +197,51 @@ class ActorRolloutRefWorker(ARRWorker):
         # Mark base sync as done for actor workers
         if self._is_actor and peft_config is not None:
             self.base_sync_done = True
+        
+        # Measure network I/O after sync
+        net_io_end = psutil.net_io_counters()
+        time_end = time_module.time()
+        
+        # Calculate differences
+        bytes_sent = net_io_end.bytes_sent - net_io_start.bytes_sent
+        bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+        elapsed_time = time_end - time_start
+        
+        # Log network I/O statistics
+        rank = torch.distributed.get_rank()
+        role = "Actor" if self._is_actor else "Rollout"
+        sync_type = "LoRA" if (peft_config is not None and self.base_sync_done) else "Full"
+        total_bytes = bytes_sent + bytes_recv
+        bandwidth_gbps = (total_bytes / (1024**3)) / elapsed_time if elapsed_time > 0 else 0
+        
+        print(f"[{role} Rank {rank}] sync_rollout_weights() Network I/O:")
+        print(f"  Type: {sync_type} weights sync")
+        print(f"  Time: {elapsed_time:.3f}s")
+        print(f"  Bytes sent: {bytes_sent / (1024**2):.2f} MB ({bytes_sent / (1024**3):.4f} GB)")
+        print(f"  Bytes recv: {bytes_recv / (1024**2):.2f} MB ({bytes_recv / (1024**3):.4f} GB)")
+        print(f"  Total I/O: {total_bytes / (1024**2):.2f} MB ({total_bytes / (1024**3):.4f} GB)")
+        print(f"  Bandwidth: {bandwidth_gbps:.2f} GB/s")
+        
+        # Optional: Log to CSV file for analysis
+        if rank == 0:  # Only log from rank 0 to avoid file conflicts
+            import csv
+            import os
+            log_file = "sync_weights_network_io.csv"
+            file_exists = os.path.exists(log_file)
+            with open(log_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['timestamp', 'role', 'sync_type', 'time_s', 'bytes_sent', 'bytes_recv', 'total_bytes', 'bandwidth_gbps'])
+                writer.writerow([
+                    time_module.time(),
+                    role,
+                    sync_type,
+                    elapsed_time,
+                    bytes_sent,
+                    bytes_recv,
+                    total_bytes,
+                    bandwidth_gbps
+                ])
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def get_actor_weights_info(self):
@@ -333,6 +385,8 @@ class RolloutWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="rollout"), blocking=False)
     def async_generate_sequences(self, prompts):
         # Support all hardwares
+        print("Starting async_generate_sequences")
+
         prompts = prompts.to(get_device_id())
 
         assert self._is_rollout
@@ -347,14 +401,19 @@ class RolloutWorker(ActorRolloutRefWorker):
         }
         prompts.meta_info.update(meta_info)
         timing_generate = {}
+        print("before rollout sharding manager")
         with self.rollout_sharding_manager:
+            print("after entering rollout sharding ctx manager")
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
+            print("Log 1")
 
             with simple_timer("generate_sequences", timing_generate):
                 output = self.rollout.generate_sequences(prompts=prompts)
+            print("Finish generating sequences")
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
+        print("after rollout generation")
         timing_generate.update(self.rollout_sharding_manager.timing)
         # We calculate the average timing across all ranks
         # to make sure meta_info["timing"] is the same

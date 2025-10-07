@@ -219,7 +219,7 @@ class ActorRolloutRefWorker(ARRWorker):
                         lora_name=f"{lora_int_id}",
                         lora_int_id=lora_int_id,
                         lora_path="verl_lora_path",
-                        peft_config=self.peft_config,
+                        peft_config=dataclasses.asdict(self.peft_config),
                         lora_tensors=lora_tensors,
                     )
                     print("LoRA Request added")

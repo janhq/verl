@@ -21,8 +21,8 @@ from verl.utils.fsdp_utils import (
     replace_lora_wrapper,
     fsdp_version,
 )
+import dataclasses
 from verl.utils.vllm.utils import TensorLoRARequest
-from dataclasses import asdict
 import time
 import torch
 import torch.distributed
@@ -57,14 +57,13 @@ from verl.workers.fsdp_workers import CriticWorker
 from verl.workers.rollout import get_rollout_class
 
 from .distributed_util import stateless_init_process_group
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import TaskType, get_peft_model
 from codetiming import Timer
 
 import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from peft import PeftModel
 from safetensors.torch import save_file
-from dataclasses import asdict
 import json
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -72,6 +71,19 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 device_name = get_device_name()
 
 __all__ = ["ActorRolloutRefWorker", "AsyncActorRolloutRefWorker", "CriticWorker", "RolloutWorker"]
+
+
+def _convert_sets_to_lists(obj):
+    """Recursively convert sets (and nested sets) into lists so JSON can serialize."""
+    if isinstance(obj, set):
+        return sorted(list(obj))
+    if isinstance(obj, tuple):
+        return [_convert_sets_to_lists(v) for v in obj]
+    if isinstance(obj, list):
+        return [_convert_sets_to_lists(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _convert_sets_to_lists(v) for k, v in obj.items()}
+    return obj
 
 
 class ActorRolloutRefWorker(ARRWorker):
@@ -133,7 +145,10 @@ class ActorRolloutRefWorker(ARRWorker):
         peft_config = None
         if self._is_actor:
             params, peft_config = self._get_actor_params()
-        
+            print("TYPE OF PEFT CONFIG", type(peft_config))
+            print("PEFT CONFIG for actor", peft_config)
+        print("BASE SYNC DONE for actor", self.base_sync_done)
+
         # Rollout side: prepare vLLM model
         if self._is_rollout:
             inference_model = (
@@ -142,12 +157,41 @@ class ActorRolloutRefWorker(ARRWorker):
             from verl.utils.vllm.patch import patch_vllm_moe_model_weight_loader
             patch_vllm_moe_model_weight_loader(inference_model)
         
+        # Broadcast peft_config from actor rank 0 so rollout ranks can use LoRA path
+        device = get_torch_device().current_device()
+        stream = get_torch_device().current_stream()
+        if torch.distributed.get_rank() == 0 and self._is_actor and peft_config is not None:
+            print("TYPE OF PEFT CONFIG", type(peft_config))
+            payload_bytes = json.dumps(_convert_sets_to_lists(dataclasses.asdict(peft_config))).encode("utf-8")
+            length_tensor = torch.tensor([len(payload_bytes)], dtype=torch.int64, device=device)
+        else:
+            payload_bytes = None
+            length_tensor = torch.empty(1, dtype=torch.int64, device=device)
+        self._weight_sync_group.broadcast(length_tensor, src=0, stream=stream)
+        payload_len = int(length_tensor.item())
+        if payload_len > 0:
+            buf = torch.empty(payload_len, dtype=torch.uint8, device=device)
+            if torch.distributed.get_rank() == 0 and self._is_actor and payload_bytes is not None:
+                buf.copy_(torch.tensor(list(payload_bytes), dtype=torch.uint8, device=device))
+            self._weight_sync_group.broadcast(buf, src=0, stream=stream)
+            if self._is_rollout:
+                from peft.tuners.lora.config import LoraConfig
+                received_json = bytes(buf.tolist()).decode("utf-8")
+                peft_config = LoraConfig(**json.loads(received_json))
+                self.peft_config = peft_config
+            elif self._is_actor and peft_config is not None:
+                self.peft_config = peft_config
+        else:
+            if self._is_rollout:
+                peft_config = None
+                self.peft_config = None
+
         # If this is a LoRA model and base weights are already synced, use vLLM LoRA interface
         if peft_config is not None and self.base_sync_done:
             # Sync only LoRA adapters via vLLM's add_lora
+            print("Mode: LoRA") if self._is_rollout else print("Mode: Actor")
             if self._is_rollout:
                 import time
-                from dataclasses import asdict
                 from verl.utils.vllm.utils import TensorLoRARequest
                 
                 # Prepare LoRA tensors
@@ -169,17 +213,21 @@ class ActorRolloutRefWorker(ARRWorker):
                 
                 # Load LoRA via vLLM
                 if self._is_rollout:
+                    print("Yes we do access this for LoRA")
                     lora_int_id = int(time.time_ns() % 0x7FFFFFFF)
                     lora_request = TensorLoRARequest(
                         lora_name=f"{lora_int_id}",
                         lora_int_id=lora_int_id,
                         lora_path="verl_lora_path",
-                        peft_config=asdict(peft_config),
+                        peft_config=self.peft_config,
                         lora_tensors=lora_tensors,
                     )
+                    print("LoRA Request added")
                     self.rollout.inference_engine.llm_engine.add_lora(lora_request)
         else:
             # Full weight sync (first time, or non-LoRA model)
+            print("Base Sync for Rollout") if self._is_rollout else print("Base Sync for Actor")
+            #print("My base sync done is", self.base_sync_done)
             for key, shape, dtype in self._weights_info:
                 tensor = torch.empty(shape, dtype=dtype, device=get_torch_device().current_device())
                 if self._is_actor:
@@ -194,8 +242,7 @@ class ActorRolloutRefWorker(ARRWorker):
                 if self._is_rollout:
                     inference_model.load_weights([(key, tensor)])
         
-        # Mark base sync as done for actor workers
-        if self._is_actor and peft_config is not None:
+            # Mark base sync as done for actor workers
             self.base_sync_done = True
         
         # Measure network I/O after sync
@@ -304,6 +351,9 @@ class RolloutWorker(ActorRolloutRefWorker):
         )
         self._is_rollout = True
         self._is_actor = False
+        self.base_sync_done = False
+        self.peft_config = None
+        
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):

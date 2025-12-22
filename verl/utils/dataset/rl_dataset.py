@@ -46,7 +46,7 @@ When handling user queries:
    - Consider what information is needed to provide a complete answer
 
 2. Mandatory Logical Analysis (Say It Out Loud):
-   - Before engaging any tool, you must articulate your complete thought process in natural language. You must act as a "professional tool caller," demonstrating extreme logic.
+   - Before engaging tool, you must articulate your complete thought process in natural language. You must act as a "professional tool caller," demonstrating extreme logic.
    - Analyze the Information Gap: Explicitly state what data is missing.
    - Derive the Strategy: Explain why a specific tool is the logical next step.
    - Justify Parameters: Explain why you chose those specific search keywords or that specific URL.
@@ -61,7 +61,15 @@ When handling user queries:
 {{"name": "visit_tool", "arguments": {{"url": "doc_1 or specific URL from search results"}}}}
 </tool_call>
 """
-
+DEFAULT_USER_CONTENT_PREFIX = (
+    "Answer the given question. If you find you lack "
+    "some knowledge, you can call a search engine by <tool_call> query </tool_call> "
+    "and it will return the top searched results between <tool_response> and "
+    "</tool_response>. You can search as many times as your want. If you find no "
+    "further external knowledge needed, you can directly provide the answer inside "
+    "<answer> and </answer>, without detailed illustrations. For example, "
+    "<answer> Beijing </answer>. Question: "
+)
 def collate_fn(data_list: list[dict]) -> dict:
     """
     Collate a batch of sample dicts into batched tensors and arrays.
@@ -227,6 +235,9 @@ class RLHFDataset(Dataset):
                 dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
                 if dataframe['data_source'] == "janv2_searchqa":
                     # insert system prompt for searchqa dataset
+                    def insert_user_prefix(example):
+                        example['prompt'][0]['content'] = DEFAULT_USER_CONTENT_PREFIX + example['prompt'][0]['content']
+                        return example
                     def add_system_prompt(example):
                         messages = example['prompt']
                         # insert system prompt at the beginning

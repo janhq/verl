@@ -563,17 +563,6 @@ class SGLangHttpServer:
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
         
-        # === ADD LOGGING START ===
-        from transformers import AutoTokenizer
-        
-        # Load tokenizer once (you may want to cache this)
-        if not hasattr(self, '_debug_tokenizer'):
-            self._debug_tokenizer = AutoTokenizer.from_pretrained(self.model_config.local_path, trust_remote_code=True)
-        
-        # Decode and log the prompt
-        prompt_text = self._debug_tokenizer.decode(prompt_ids, skip_special_tokens=False)
-        logger.warning(f"\n{'='*50}\n=== PROMPT ===\n{'='*50}\n{prompt_text}\n{'='*50}")
-        # === ADD LOGGING END ===
         
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
         sampling_params["max_new_tokens"] = max_new_tokens
@@ -587,8 +576,6 @@ class SGLangHttpServer:
             image_data=image_data,
         )
         output = await self.tokenizer_manager.generate_request(request, None).__anext__()        
-        # === ADD LOGGING START ===
-        # Decode and log the response
 
         if return_logprob:
             output_token_logprobs = output["meta_info"]["output_token_logprobs"]
@@ -599,9 +586,6 @@ class SGLangHttpServer:
             token_ids = output["output_ids"]
             log_probs = None
         
-        response_text = self._debug_tokenizer.decode(token_ids, skip_special_tokens=False)
-        logger.warning(f"\n{'='*50}\n=== RESPONSE ===\n{'='*50}\n{response_text}\n{'='*50}")
-        # === ADD LOGGING END ===
         
         return TokenOutput(token_ids=token_ids, log_probs=log_probs)
 

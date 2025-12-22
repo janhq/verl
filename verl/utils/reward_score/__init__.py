@@ -134,8 +134,11 @@ def default_compute_score(
         res = compute_score(solution_str, ground_truth, question=extra_info.get("question") if extra_info else None)
 
     else:
-        from verl.utils.reward_score.deepscaler_math.math_reward import deepscaler_reward_fn
-        res = deepscaler_reward_fn(solution_str, ground_truth)
+        from verl.utils.reward_score.jan_v2_reward import compute_score
+
+        res = compute_score(solution_str, ground_truth, question=extra_info.get("question") if extra_info else None)
+        # from verl.utils.reward_score.deepscaler_math.math_reward import deepscaler_reward_fn
+        # res = deepscaler_reward_fn(solution_str, ground_truth)
         
     if isinstance(res, dict):
         return res

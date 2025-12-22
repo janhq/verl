@@ -232,28 +232,31 @@ class RLHFDataset(Dataset):
                     dataframe = dataframe.select(range(4000))
             else:
                 dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
-                if dataframe['data_source'] == "janv2_searchqa":
+
                     # insert system prompt for searchqa dataset
-                    def insert_user_prefix(example):
+                def insert_user_prefix(example):
+                    if example['data_source'] == "janv2_searchqa":
                         example['prompt'][0]['content'] = DEFAULT_USER_CONTENT_PREFIX + example['prompt'][0]['content']
-                        return example
-                    def add_system_prompt(example):
+                    return example
+                def add_system_prompt(example):
+                    if example['data_source'] == "janv2_searchqa":
                         messages = example['prompt']
                         # insert system prompt at the beginning
                         messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-                        return example
-                    dataframe = dataframe.map(add_system_prompt)
-                    dataframe = dataframe.map(insert_user_prefix)
-
-                names = dataframe.column_names
-                print(names)
-                for name in names:
-                    if name not in allowed_keys:
-                        dataframe = dataframe.remove_columns(name)
-                dataframe = dataframe.map(filter_allowed_keys)
+                    return example
+                dataframe = dataframe.map(add_system_prompt, num_proc=128, batched=True)
+                dataframe = dataframe.map(insert_user_prefix, num_proc=128, batched=True)
+                # print("DATA SOURCE",dataframe['data_source'] )
+                # if dataframe['data_source'] != "janv2_searchqa":
+                #     names = dataframe.column_names
+                #     print(names)
+                #     for name in names:
+                #         if name not in allowed_keys:
+                #             dataframe = dataframe.remove_columns(name)
+                #     dataframe = dataframe.map(filter_allowed_keys)
                 dataframe = dataframe.shuffle()
-                if len(dataframe) > 4000:
-                    dataframe = dataframe.select(range(4000))
+                # if len(dataframe) > 4000 and dataframe['data_source'] != "janv2_searchqa":
+                #     dataframe = dataframe.select(range(4000))
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 

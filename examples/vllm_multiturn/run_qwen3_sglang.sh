@@ -12,7 +12,7 @@ PROJECT_DIR="$(pwd)"
 CONFIG_PATH="$PROJECT_DIR/examples/vllm_multiturn/config"
 
 
-TRAIN_DATA="/mnt/nas/bachvd/Code-Agent/verl/data/searchR1_processed_direct/train.parquet"
+TRAIN_DATA="/mnt/nas/bachvd/Code-Agent/verl/data/janv2_searchqa/train.parquet"
 VAL_DATA="/mnt/nas/bachvd/Code-Agent/verl/data/searchR1_processed_direct/test.parquet"
 
 TOOL_CONFIG="$CONFIG_PATH/tool_config/search_tool_config.yaml"

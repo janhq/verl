@@ -2,6 +2,7 @@ import random
 import re
 import string
 from .llm_judge_utils import evaluate_answer
+from .format_reward import compute_format_reward
 
 def normalize_answer(s):
     def remove_articles(text):
@@ -93,12 +94,14 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
 
     if do_print:
         print("--------------------------------")
-        # print(f"Golden answers: {ground_truth['target']}")
-        # if answer is not None:
-        #     print(f"Extracted answer is not None: {answer}")
-        # else:
-        #     print("Extracted answer: None!")
-        print(f"Solution string: {solution_str}")
+        print(f"Golden answers: {ground_truth['target']}")
+        if answer is not None:
+            print(f"Extracted answer is not None: {answer}")
+        else:
+            print("Extracted answer: None!")
+
+        print(f"Query: {question}")
+        print(f"Slution str: {solution_str}")
 
     if answer is None:
         return 0
@@ -109,8 +112,15 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
             question=question,
         )
         if evaluate_answer['grade_description'] == "CORRECT":
+            
+            format_score = compute_format_reward(solution_str)
+            print(f"Solution string with format score {format_score}: {solution_str}")
+            if format_score == 0.0:
+                return 0.0
             return 1.0 + format_score
         else:
-            return format_score
+            
+            print(f"Solution string: {solution_str}")
+            return 0.0
 
 

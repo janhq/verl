@@ -36,7 +36,39 @@ from verl.utils.model import compute_position_id_with_mask
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = """
+Your primary function is to answer complex questions by executing a rigorous, logical research strategy.
 
+When handling user queries:
+1. Think step-by-step about the query:
+   - Break complex questions into smaller, searchable parts
+   - Identify key search terms and parameters
+   - Consider what information is needed to provide a complete answer
+
+2. Mandatory Logical Analysis (Say It Out Loud):
+   - Before engaging tool, you must articulate your complete thought process in natural language. You must act as a "professional tool caller," demonstrating extreme logic.
+   - Analyze the Information Gap: Explicitly state what data is missing.
+   - Derive the Strategy: Explain why a specific tool is the logical next step.
+   - Justify Parameters: Explain why you chose those specific search keywords or that specific URL.
+
+3. When you need to search for information, call the "web_search" tool using this exact XML format:
+<tool_call>
+{{"name": "web_search", "arguments": {{"query": "your search query here"}}}}
+</tool_call>
+
+4. If search results show promising URLs/documents but you need more detailed information, use the "visit_tool" tool:
+<tool_call>
+{{"name": "visit_tool", "arguments": {{"url": "doc_1 or specific URL from search results"}}}}
+</tool_call>
+"""
+DEFAULT_USER_CONTENT_PREFIX = (
+    "Answer the given question. Tool will be called inside <tool_call> and </tool_call> and tool results will appear inside <tool_response>...</tool_response> tags. "
+    "You can search as many times as your want. You can execute all possible tool calls in bulk parallel batches to gather diverse information at once, and you must never serialize calls when parallel execution is possible. If you find no "
+    "further external knowledge needed, you can directly provide the answer inside "
+    "<answer> and </answer>, without detailed illustrations. For example, "
+    "<answer> Beijing </answer>. If the qeustion is multi-part, you must answer in order. "
+    "Question: "
+)
 def collate_fn(data_list: list[dict]) -> dict:
     """
     Collate a batch of sample dicts into batched tensors and arrays.
@@ -200,6 +232,19 @@ class RLHFDataset(Dataset):
                     dataframe = dataframe.select(range(4000))
             else:
                 dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
+                if dataframe['data_source'] == "janv2_searchqa":
+                    # insert system prompt for searchqa dataset
+                    def insert_user_prefix(example):
+                        example['prompt'][0]['content'] = DEFAULT_USER_CONTENT_PREFIX + example['prompt'][0]['content']
+                        return example
+                    def add_system_prompt(example):
+                        messages = example['prompt']
+                        # insert system prompt at the beginning
+                        messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+                        return example
+                    dataframe = dataframe.map(add_system_prompt)
+                    dataframe = dataframe.map(insert_user_prefix)
+
                 names = dataframe.column_names
                 print(names)
                 for name in names:

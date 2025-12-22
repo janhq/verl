@@ -62,13 +62,12 @@ When handling user queries:
 </tool_call>
 """
 DEFAULT_USER_CONTENT_PREFIX = (
-    "Answer the given question. If you find you lack "
-    "some knowledge, you can call a search engine by <tool_call> query </tool_call> "
-    "and it will return the top searched results between <tool_response> and "
-    "</tool_response>. You can search as many times as your want. If you find no "
+    "Answer the given question. Tool will be called inside <tool_call> and </tool_call> and tool results will appear inside <tool_response>...</tool_response> tags. "
+    "You can search as many times as your want. You can execute all possible tool calls in bulk parallel batches to gather diverse information at once, and you must never serialize calls when parallel execution is possible. If you find no "
     "further external knowledge needed, you can directly provide the answer inside "
     "<answer> and </answer>, without detailed illustrations. For example, "
-    "<answer> Beijing </answer>. Question: "
+    "<answer> Beijing </answer>. If the qeustion is multi-part, you must answer in order. "
+    "Question: "
 )
 def collate_fn(data_list: list[dict]) -> dict:
     """
@@ -244,6 +243,7 @@ class RLHFDataset(Dataset):
                         messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                         return example
                     dataframe = dataframe.map(add_system_prompt)
+                    dataframe = dataframe.map(insert_user_prefix)
 
                 names = dataframe.column_names
                 print(names)

@@ -57,8 +57,8 @@ def process_single_row(row, row_index):
     question = row.get("question", "")
 
     # Build prompt structure
-    # user_content = user_content_prefix.rstrip("\n") + question
-    user_content = question
+    user_content = user_content_prefix.rstrip("\n") + question
+    # user_content = question
     prompt = [{"role": "user", "content": user_content}]
 
     # Extract ground truth from reward_model or fallback to golden_answers

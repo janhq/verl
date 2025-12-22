@@ -52,6 +52,17 @@ These predicted answers are all NOT_ATTEMPTED because:
 
 
 Also note the following things:
+- **Stacked / Multi-part Questions:**
+    - Some questions contain multiple distinct sub-questions strung together (e.g., "Who is X? Where is Y?").
+    - In these cases, the **Gold Target** will separate the answers with a pipe symbol (e.g., "Answer X | Answer Y").
+    - For a predicted answer to be **CORRECT**, it must answer **ALL** parts of the stacked question correctly.
+    - If the predicted answer answers one part correctly but gets another part wrong (or omits it), it is **INCORRECT**.
+    - *Example:*
+        - Question: "Capital of France? Capital of Germany?"
+        - Gold Target: "Paris | Berlin"
+        - Prediction: "Paris and Berlin" -> **CORRECT**
+        - Prediction: "Paris" -> **INCORRECT** (Missing info)
+        - Prediction: "Paris and Munich" -> **INCORRECT** (Contradiction)
 - For grading questions where the gold target is a number, the predicted answer needs to be correct to the last significant figure in the gold answer. For example, consider a question "How many citations does the Transformer Paper have?" with gold target "120k".
     - Predicted answers "120k", "124k", and 115k" are all CORRECT.
     - Predicted answers "100k" and "113k" are INCORRECT.
@@ -65,7 +76,6 @@ Also note the following things:
     - For the question "What is the name of Barack Obama's wife?", the gold target is "Michelle Obama". The predicted answer "Michelle". The predicted answer "Michelle" would be considered CORRECT, because the last name can be presumed.
 - Do not punish for typos in people's name if it's clearly the same name.
     - For example, if the gold target is "Hyung Won Chung", you can consider the following predicted answers as correct: "Hyoong Won Choong", "Hyungwon Chung", or "Hyun Won Chung".
-
 
 Here is a new example. Simply reply with either CORRECT, INCORRECT, NOT ATTEMPTED. Don't apologize or correct yourself if there was a mistake; we are just trying to grade the answer.
 Use code with caution.
@@ -91,7 +101,7 @@ ERROR_API_CALL_FAILED = "ERROR_API_CALL_FAILED"
 ERROR_UNEXPECTED_LLM_RESPONSE = "ERROR_UNEXPECTED_LLM_RESPONSE"
 
 BASE_URL = os.environ.get("CORRECTNESS_GRADE_URL",
-                          "http://10.200.108.149:8000/v1")
+                          "http://10.200.108.185:3001/v1")
 MODEL = os.environ.get("CORRECTNESS_GRADE_MODEL", "Qwen3-30B")
 
 

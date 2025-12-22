@@ -108,7 +108,7 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
             golden_answers=ground_truth,
             question=question,
         )
-        if evaluate_answer == "CORRECT":
+        if evaluate_answer['grade_description'] == "CORRECT":
             return 1.0 + format_score
         else:
             return format_score

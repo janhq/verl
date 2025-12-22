@@ -116,18 +116,29 @@ def default_compute_score(
         from verl.utils.reward_score.deepscaler_math_multi_verify.math_reward import deepscaler_reward_fn
         res = deepscaler_reward_fn(solution_str, ground_truth)
 
-        if isinstance(res, (int, float, bool)):
-            return float(res)
-        else:
-            return float(res[0])
+    elif data_source in [
+        "searchR1_nq",
+        "searchR1_triviaqa",
+        "searchR1_popqa",
+        "searchR1_hotpotqa",
+        "searchR1_2wikimultihopqa",
+        "searchR1_musique",
+        "searchR1_bamboogle",
+    ]:
+        from . import search_r1_like_qa_em
+
+        res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+
     else:
         from verl.utils.reward_score.deepscaler_math.math_reward import deepscaler_reward_fn
         res = deepscaler_reward_fn(solution_str, ground_truth)
-
-        if isinstance(res, (int, float, bool)):
-            return float(res)
-        else:
-            return float(res[0])
+        
+    if isinstance(res, dict):
+        return res
+    elif isinstance(res, int | float | bool):
+        return float(res)
+    else:
+        return float(res[0])
 
 
 @deprecated("verl.utils.reward_score.default_compute_score")

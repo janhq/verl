@@ -463,6 +463,7 @@ class SGLangHttpServer:
             "attention_backend": attention_backend if attention_backend is not None else "triton",
             "cuda_graph_max_bs" : 512,
             "skip_tokenizer_init": self.config.skip_tokenizer_init,
+            "cuda_graph_max_bs" : 512,
             "skip_server_warmup": True,
             "quantization": quantization,
             # "disable_cuda_graph": True,
@@ -561,7 +562,8 @@ class SGLangHttpServer:
         image_data: Optional[list[Any]] = None,
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
-        # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
+        
+        
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
         sampling_params["max_new_tokens"] = max_new_tokens
         return_logprob = sampling_params.pop("logprobs", False)
@@ -573,8 +575,8 @@ class SGLangHttpServer:
             return_logprob=return_logprob,
             image_data=image_data,
         )
-        output = await self.tokenizer_manager.generate_request(request, None).__anext__()
-        print("########## OUTPUT", output)
+        output = await self.tokenizer_manager.generate_request(request, None).__anext__()        
+
         if return_logprob:
             output_token_logprobs = output["meta_info"]["output_token_logprobs"]
             log_probs, token_ids = zip(
@@ -583,6 +585,8 @@ class SGLangHttpServer:
         else:
             token_ids = output["output_ids"]
             log_probs = None
+        
+        
         return TokenOutput(token_ids=token_ids, log_probs=log_probs)
 
 

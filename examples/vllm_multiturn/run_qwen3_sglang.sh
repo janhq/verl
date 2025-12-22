@@ -2,6 +2,7 @@ set -x
 
 ulimit -n 65535
 
+
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export WANDB_API_KEY=de8d037779af70199106db0710f417f5157c1818
 export SGLANG_ENABLE_JIT_DEEPGEMM=0
@@ -42,13 +43,19 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.max_model_len=15000 \
+    actor_rollout_ref.rollout.max_model_len=2048 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=sglang \
+    actor_rollout_ref.rollout.mode=async \
+    +actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer \
+    +actor_rollout_ref.rollout.engine_kwargs.sglang.mm_attention_backend=flashinfer \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
-    actor_rollout_ref.rollout.n=1 \
-    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=2 \
+    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.multi_turn.enable=True \
+    actor_rollout_ref.rollout.multi_turn.format=hermes \
+    actor_rollout_ref.rollout.agent.default_agent_loop=tool_agent \
+    actor_rollout_ref.rollout.multi_turn.max_assistant_turns=20 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \

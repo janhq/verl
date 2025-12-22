@@ -322,12 +322,13 @@ def process_weights_after_loading_for_vllm11(self, layer) -> None:
 
     del layer.weight_scale_inv
 
-    maybe_post_process_fp8_weight_block(layer, self.cutlass_block_fp8_supported)
+    maybe_post_process_fp8_weight_block(layer) #self.cutlass_block_fp8_supported
 
 
 def process_weights_after_loading_moe_for_vllm10(self, layer) -> None:
     """This function is used to process the weights after loading for a FusedMoE layer, it is used for vllm v0.10"""
-    from vllm.model_executor.layers.fused_moe.rocm_aiter_fused_moe import is_rocm_aiter_moe_enabled
+    # from vllm.model_executor.layers.fused_moe.rocm_aiter_fused_moe import is_rocm_aiter_moe_enabled
+    from vllm._aiter_ops import rocm_aiter_ops
     from vllm.model_executor.layers.quantization.fp8 import _is_col_major, _swap_w13_to_w31
     from vllm.model_executor.layers.quantization.utils.fp8_utils import (
         get_col_major_tma_aligned_tensor,
@@ -335,7 +336,7 @@ def process_weights_after_loading_moe_for_vllm10(self, layer) -> None:
     )
     from vllm.utils.deep_gemm import is_blackwell_deep_gemm_used
 
-    self.rocm_aiter_moe_enabled = is_rocm_aiter_moe_enabled()
+    self.rocm_aiter_moe_enabled = rocm_aiter_ops.is_fused_moe_enabled() # is_rocm_aiter_moe_enabled()
     assert self.quant_config.activation_scheme == "dynamic"
     if self.flashinfer_moe_enabled:
         w13_weight = _swap_w13_to_w31(layer.w13_weight.data)
@@ -403,7 +404,9 @@ def process_weights_after_loading_moe_for_vllm10(self, layer) -> None:
 
 def process_weights_after_loading_moe_for_vllm11(self, layer) -> None:
     """This function is used to process the weights after loading for a FusedMoE layer, it is used for vllm 0.11"""
-    from vllm.model_executor.layers.fused_moe.rocm_aiter_fused_moe import is_rocm_aiter_moe_enabled
+    # from vllm.model_executor.layers.fused_moe.rocm_aiter_fused_moe import is_rocm_aiter_moe_enabled
+    from vllm._aiter_ops import rocm_aiter_ops
+
     from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
         swap_w13_to_w31,
     )
@@ -416,7 +419,7 @@ def process_weights_after_loading_moe_for_vllm11(self, layer) -> None:
         is_deep_gemm_e8m0_used,
     )
 
-    self.rocm_aiter_moe_enabled = is_rocm_aiter_moe_enabled()
+    self.rocm_aiter_moe_enabled =  rocm_aiter_ops.is_fused_moe_enabled() #is_rocm_aiter_moe_enabled()
 
     assert self.block_quant and self.quant_config.is_checkpoint_fp8_serialized
     assert self.quant_config.activation_scheme == "dynamic"

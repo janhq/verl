@@ -164,9 +164,10 @@ class SGLangHttpServer:
             "trust_remote_code": self.model_config.trust_remote_code,
             "max_running_requests": self.config.get("max_num_seqs", None),
             "log_level": "error",
-            "mm_attention_backend": "fa3",
-            "attention_backend": attention_backend if attention_backend is not None else "fa3",
+            "mm_attention_backend": "flashinfer",
+            "attention_backend": attention_backend if attention_backend is not None else "flashinfer",
             "skip_tokenizer_init": self.config.skip_tokenizer_init,
+            "cuda_graph_max_bs" : 512,
             "skip_server_warmup": True,
             "quantization": quantization,
             "json_model_override_args": json.dumps({"quantization_config": fp8_block_quant_kwargs})
@@ -264,7 +265,19 @@ class SGLangHttpServer:
         image_data: Optional[list[Any]] = None,
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
-        # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
+        
+        # === ADD LOGGING START ===
+        from transformers import AutoTokenizer
+        
+        # Load tokenizer once (you may want to cache this)
+        if not hasattr(self, '_debug_tokenizer'):
+            self._debug_tokenizer = AutoTokenizer.from_pretrained(self.model_config.local_path, trust_remote_code=True)
+        
+        # Decode and log the prompt
+        prompt_text = self._debug_tokenizer.decode(prompt_ids, skip_special_tokens=False)
+        logger.warning(f"\n{'='*50}\n=== PROMPT ===\n{'='*50}\n{prompt_text}\n{'='*50}")
+        # === ADD LOGGING END ===
+        
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
         sampling_params["max_new_tokens"] = max_new_tokens
         return_logprob = sampling_params.pop("logprobs", False)
@@ -277,6 +290,9 @@ class SGLangHttpServer:
             image_data=image_data,
         )
         output = await self.tokenizer_manager.generate_request(request, None).__anext__()
+        
+        # === ADD LOGGING START ===
+        # Decode and log the response
         if return_logprob:
             output_token_logprobs = output["meta_info"]["output_token_logprobs"]
             log_probs, token_ids = zip(
@@ -285,6 +301,11 @@ class SGLangHttpServer:
         else:
             token_ids = output["output_ids"]
             log_probs = None
+        
+        response_text = self._debug_tokenizer.decode(token_ids, skip_special_tokens=False)
+        logger.warning(f"\n{'='*50}\n=== RESPONSE ===\n{'='*50}\n{response_text}\n{'='*50}")
+        # === ADD LOGGING END ===
+        
         return TokenOutput(token_ids=token_ids, log_probs=log_probs)
 
 

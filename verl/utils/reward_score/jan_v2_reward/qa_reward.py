@@ -1,7 +1,7 @@
 import random
 import re
 import string
-
+from .llm_judge_utils import evaluate_answer
 
 def normalize_answer(s):
     def remove_articles(text):
@@ -45,7 +45,7 @@ def subem_check(prediction, golden_answers):
             break
     return score
 
-def thinking_length_reward(solution_str):
+# def thinking_length_reward(solution_str):
     
 def extract_solution(solution_str):
     """Extract the equation from the solution string."""
@@ -77,7 +77,7 @@ def count_answer_tags(text):
     return opening_tags, closing_tags
 
 
-def compute_score(solution_str, ground_truth, method="strict", format_score=0.0, score=1.0):
+def compute_score(solution_str, ground_truth, question, format_score=0.0, score=1.0):
     """The scoring function for exact match (EM).
 
     Args:
@@ -103,38 +103,14 @@ def compute_score(solution_str, ground_truth, method="strict", format_score=0.0,
     if answer is None:
         return 0
     else:
-        if em_check(answer, ground_truth["target"]):
-            if open_count > 10 or close_count > 10:  # prevent output a lot of </answer>
-                score = score / 4
-                return score
-            return score
+        evaluate_answer = evaluate_answer(
+            prediction=answer,
+            golden_answers=ground_truth,
+            question=question,
+        )
+        if evaluate_answer == "CORRECT":
+            return 1.0 + format_score
         else:
             return format_score
 
 
-def compute_score_subem(solution_str, ground_truth, method="strict", format_score=0.0, score=1.0):
-    """The scoring function for substring exact match (EM).
-
-    Args:
-        solution_str: the solution text
-        ground_truth: the ground truth
-        method: the method to extract the solution, choices are 'strict' and 'flexible'
-        format_score: the score for the format
-        score: the score for the correct answer
-    """
-    answer = extract_solution(solution_str=solution_str)
-    do_print = random.randint(1, 64) == 1
-
-    if do_print:
-        print("--------------------------------")
-        print(f"Golden answers: {ground_truth['target']}")
-        print(f"Extracted answer: {answer}")
-        print(f"Solution string: {solution_str}")
-
-    if answer is None:
-        return 0
-    else:
-        if subem_check(answer, ground_truth["target"]):
-            return score
-        else:
-            return format_score

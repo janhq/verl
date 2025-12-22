@@ -36,6 +36,8 @@ from verl.utils.model import compute_position_id_with_mask
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = """You are a helpful and harmless assistant.
+"""
 
 def collate_fn(data_list: list[dict]) -> dict:
     """
@@ -200,6 +202,15 @@ class RLHFDataset(Dataset):
                     dataframe = dataframe.select(range(4000))
             else:
                 dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
+                if dataframe['data_source'] == "janv2_searchqa":
+                    # insert system prompt for searchqa dataset
+                    def add_system_prompt(example):
+                        messages = example['prompt']
+                        # insert system prompt at the beginning
+                        messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+                        return example
+                    dataframe = dataframe.map(add_system_prompt)
+
                 names = dataframe.column_names
                 print(names)
                 for name in names:

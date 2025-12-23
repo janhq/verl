@@ -57,8 +57,8 @@ class WebSearchExecutionWorker:
     """Worker for executing web search operations with optional rate limiting."""
 
     def __init__(self, enable_global_rate_limit=True, rate_limit=10):
-        self.rate_limit_worker = self._init_rate_limit(rate_limit) if enable_global_rate_limit else None
-
+        # self.rate_limit_worker = self._init_rate_limit(rate_limit) if enable_global_rate_limit else None
+        self.rate_limit_worker = None
     def _init_rate_limit(self, rate_limit):
         return TokenBucketWorker.options(name="websearch-rate-limiter", get_if_exists=True).remote(rate_limit)
 
@@ -93,7 +93,7 @@ def init_websearch_execution_pool(
         raise NotImplementedError("Process mode is not implemented yet")
 
 
-def _create_preview(text: str, max_sentences: int = 3, max_chars: int = 300) -> str:
+def _create_preview(text: str, max_sentences: int = 3, max_chars: int = 200) -> str:
     """Create a preview from text (first few sentences)."""
     if not text:
         return "No preview available"

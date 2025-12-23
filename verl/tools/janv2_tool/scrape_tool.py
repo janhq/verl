@@ -55,8 +55,8 @@ class VisitExecutionWorker:
     """Worker for executing visit operations with optional rate limiting."""
 
     def __init__(self, enable_global_rate_limit=True, rate_limit=10):
-        self.rate_limit_worker = self._init_rate_limit(rate_limit) if enable_global_rate_limit else None
-
+        # self.rate_limit_worker = self._init_rate_limit(rate_limit) if enable_global_rate_limit else None
+        self.rate_limit_worker = None
     def _init_rate_limit(self, rate_limit):
         return TokenBucketWorker.options(name="visit-rate-limiter", get_if_exists=True).remote(rate_limit)
 

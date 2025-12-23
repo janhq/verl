@@ -93,7 +93,7 @@ def init_websearch_execution_pool(
         raise NotImplementedError("Process mode is not implemented yet")
 
 
-def _create_preview(text: str, max_sentences: int = 3, max_chars: int = 300) -> str:
+def _create_preview(text: str, max_sentences: int = 3, max_chars: int = 200) -> str:
     """Create a preview from text (first few sentences)."""
     if not text:
         return "No preview available"

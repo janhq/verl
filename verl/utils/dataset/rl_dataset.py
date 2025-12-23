@@ -46,7 +46,7 @@ When handling user queries:
    - Consider what information is needed to provide a complete answer
 
 2. Mandatory Logical Analysis (Say It Out Loud):
-   - Before engaging tool, you must articulate your complete thought process in natural language. You must act as a "professional tool caller," demonstrating extreme logic.
+   - Before engaging tools, you must articulate your complete thought process in natural language. You must act as a "professional tool caller," demonstrating extreme logic.
    - Analyze the Information Gap: Explicitly state what data is missing.
    - Derive the Strategy: Explain why a specific tool is the logical next step.
    - Justify Parameters: Explain why you chose those specific search keywords or that specific URL.
@@ -56,18 +56,18 @@ When handling user queries:
 {{"name": "web_search", "arguments": {{"query": "your search query here"}}}}
 </tool_call>
 
-4. If search results show promising URLs/documents but you need more detailed information, use the "visit_tool" tool:
+4. If search results show promising URLs/documents but you need more detailed information, use the "scrape" tool:
 <tool_call>
-{{"name": "visit_tool", "arguments": {{"url": "doc_1 or specific URL from search results"}}}}
+{{"name": "scrape", "arguments": {{"url": "doc_1 or specific URL from search results"}}}}
 </tool_call>
 """
 DEFAULT_USER_CONTENT_PREFIX = (
     "Answer the given question. Tool will be called inside <tool_call> and </tool_call> and tool results will appear inside <tool_response>...</tool_response> tags. "
-    "You can search as many times as your want. You can execute all possible tool calls in bulk parallel batches to gather diverse information at once, and you must never serialize calls when parallel execution is possible. If you find no "
-    "further external knowledge needed, you can directly provide the answer inside "
-    "<answer> and </answer>, without detailed illustrations. For example, "
-    "<answer> Beijing </answer>. If the qeustion is multi-part, you must answer in order. "
-    "Question: "
+    "You can search and scrape as many times as your want, you MUST use `scrape` to get the full content of the needed URL before answering the question. You can execute all possible tool calls in bulk parallel batches to gather diverse information at once, and you must never serialize calls when parallel execution is possible. If you find no "
+    "further external knowledge needed, you MUST directly provide the answer inside "
+    "<answer> and </answer>. For example, "
+    "<answer> Beijing </answer>. If the question is multi-part, you must answer in order. \n"
+    "Question: \n"
 )
 def collate_fn(data_list: list[dict]) -> dict:
     """
@@ -244,8 +244,10 @@ class RLHFDataset(Dataset):
                         # insert system prompt at the beginning
                         messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                     return example
-                dataframe = dataframe.map(add_system_prompt, num_proc=128, batched=True)
-                dataframe = dataframe.map(insert_user_prefix, num_proc=128, batched=True)
+                dataframe = dataframe.map(insert_user_prefix, num_proc=128)
+                dataframe = dataframe.map(add_system_prompt, num_proc=128)
+                
+                print(dataframe[0])
                 # print("DATA SOURCE",dataframe['data_source'] )
                 # if dataframe['data_source'] != "janv2_searchqa":
                 #     names = dataframe.column_names
@@ -253,7 +255,7 @@ class RLHFDataset(Dataset):
                 #     for name in names:
                 #         if name not in allowed_keys:
                 #             dataframe = dataframe.remove_columns(name)
-                #     dataframe = dataframe.map(filter_allowed_keys)
+                #     dataframe = dataframe.map(filter_all[owed_keys)
                 dataframe = dataframe.shuffle()
                 # if len(dataframe) > 4000 and dataframe['data_source'] != "janv2_searchqa":
                 #     dataframe = dataframe.select(range(4000))

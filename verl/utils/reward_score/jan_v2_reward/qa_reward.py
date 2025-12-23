@@ -90,11 +90,11 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
     """
     answer = extract_solution(solution_str=solution_str)
     open_count, close_count = count_answer_tags(solution_str)
-    do_print = random.randint(1, 64) == 1
+    do_print = random.randint(1, 16) == 1
 
     if do_print:
         print("--------------------------------")
-        print(f"Golden answers: {ground_truth['target']}")
+        print(f"Golden answers: {ground_truth}")
         if answer is not None:
             print(f"Extracted answer is not None: {answer}")
         else:
@@ -106,18 +106,18 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
     if answer is None:
         return 0
     else:
-        evaluate_answer = evaluate_answer(
-            prediction=answer,
-            golden_answers=ground_truth,
+        evaluate_result = evaluate_answer(
+            solution=answer,
+            golden_label=ground_truth.get("target")[0],
             question=question,
         )
-        if evaluate_answer['grade_description'] == "CORRECT":
+        if evaluate_result['grade_description'] == "CORRECT":
             
             format_score = compute_format_reward(solution_str)
             print(f"Solution string with format score {format_score}: {solution_str}")
             if format_score == 0.0:
                 return 0.0
-            return 1.0 + format_score
+            return 1.0 + format_score*0.2
         else:
             
             print(f"Solution string: {solution_str}")

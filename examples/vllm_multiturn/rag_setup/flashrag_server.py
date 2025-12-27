@@ -506,19 +506,20 @@ async def search_endpoint(request: SearchRequest):
     try:
         start_time = time.time()
         
-        # get candidates using BM25 (using bm25s - pure Python, no Java needed)
+        # get candidates using BM25 (using bm25s - pure Python)
         results_ids, _ = bm25_retriever._search(request.queries[0], TOP_BM25_RETRIEVAL)
         
         # Retrieve documents
         retrieved_docs = retriever.batch_search(
-            query_list=request.queries,
-            num=request.topk_retrieval,
-            return_score=False,
-            search_indices = results_ids
-        )
+                    query_list=request.queries,
+                    num=request.topk_retrieval,
+                    return_score=False,
+                    search_indices=results_ids
+                )
 
         # Rerank documents
         reranked = reranker.rerank(request.queries, retrieved_docs)
+        
         # Format response 
         response = []
         for i, doc_scores in reranked.items():
@@ -551,6 +552,50 @@ async def search_endpoint(request: SearchRequest):
                     doc_dict["score"] = float(score)
                 
                 combined.append(doc_dict)
+            
+            # Safe check: if we don't have enough documents after reranking, retrieve more
+            if len(combined) < request.topk_rerank:
+                additional_needed = request.topk_rerank - len(combined)
+                additional_topk = request.topk_retrieval + (additional_needed * 10)
+                
+                # Retrieve additional documents
+                additional_docs = retriever.batch_search(
+                    query_list=[request.queries[i]],
+                    num=additional_topk,
+                    return_score=False,
+                    search_indices=results_ids
+                )
+                
+                # Rerank the additional documents
+                additional_reranked = reranker.rerank([request.queries[i]], additional_docs)
+                
+                # Add additional documents until we reach topk_rerank
+                for doc, score, doc_id in additional_reranked.get(0, []):
+                    if len(combined) >= request.topk_rerank:
+                        break
+                    
+                    converted_doc = convert_title_format(doc)
+                    lines = converted_doc.split('\n', 1)
+                    title = lines[0].strip('"') if lines else "No title"
+                    
+                    if title in seen_titles:
+                        continue
+                    
+                    seen_titles.add(title)
+                    
+                    text = lines[1] if len(lines) > 1 else ""
+                    
+                    doc_dict = {
+                        "doc_id": doc_id,
+                        "title": title,
+                        "text": text,
+                        "contents": converted_doc
+                    }
+                    
+                    if request.return_scores:
+                        doc_dict["score"] = float(score)
+                    
+                    combined.append(doc_dict)
             
             response.append(combined)
         

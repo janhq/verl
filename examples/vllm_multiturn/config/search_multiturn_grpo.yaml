@@ -19,8 +19,9 @@ actor_rollout_ref:
     name: sglang
     multi_turn:
       enable: True
-      max_assistant_turns: 35
+      max_assistant_turns: 50
       format: hermes
       max_parallel_calls: 10
       max_tool_response_length: 16384
+
 

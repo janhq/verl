@@ -1,6 +1,18 @@
-import re
+import re, json
 from scipy.stats import skewnorm
+import Levenshtein as levenshtein
 
+def count_tool_call_turns(text):
+    # Pattern explanation:
+    # assistant   : matches the literal string
+    # \s+         : matches one or more whitespace characters (space, tab, newline, etc.)
+    # <tool_call> : matches the literal string
+    pattern = r'assistant\s+<tool_call>'
+    
+    # re.findall returns a list of all non-overlapping matches
+    matches = re.findall(pattern, text)
+    
+    return len(matches)
 
 def calculate_skewed_penalty(x, center=70, skewness=5, scale=200):
     """
@@ -39,6 +51,18 @@ def parse_assistant_thoughts(text):
     return [match.strip() for match in matches if match.strip()]
 
 
+def parse_all_tool_calls(solution_str):
+    pattern = r'<tool_call>(.*?)</tool_call>'
+    matches = re.findall(pattern, solution_str, flags=re.DOTALL)
+    matches = [match.strip() for match in matches if match.strip()]
+    tool_calls = []
+    for match in matches:
+        try:
+            tool_calls.append(json.loads(match))
+        except:
+            return []
+    return tool_calls
+
 def compute_format_reward(solution_str):
     if "<answer>" not in solution_str and "</answer>" not in solution_str:
         return 0 
@@ -48,7 +72,31 @@ def compute_format_reward(solution_str):
     if solution_str.count("<tool_call>") == 0:
         return 0.
     
+    tool_calls = parse_all_tool_calls(solution_str)
+    if len(tool_calls) == 0:
+        return 0.
+    
+    processed_tool_calls = []
+    for tool_call in tool_calls:
+        if "name" not in tool_call or "arguments" not in tool_call:
+            return 0.
+        if type(tool_call["arguments"]) != dict:
+            return 0.
+        tool = str(tool_call).lower().replace(" ", "")
+        if tool in processed_tool_calls:
+            return 0.
+        processed_tool_calls.append(tool)
+
+    
+
     assistant_thoughts = parse_assistant_thoughts(solution_str)
+    for i, str1 in enumerate(assistant_thoughts):
+        for j, str2 in enumerate(assistant_thoughts):
+            if i != j:
+                ratio = levenshtein.ratio(str2, str1)
+                if ratio > 0.8:
+                    return 0.0
+                
     length = [len(x.split(" ")) for x in assistant_thoughts]
     if len(length):
         avg_length = float(sum(length))/len(length)
@@ -57,3 +105,14 @@ def compute_format_reward(solution_str):
     else:
         return 0.
 
+def compute_bulk_tool_call_reward(solution_str):
+    num_turns = count_tool_call_turns(solution_str)
+    num_tools = solution_str.count("<tool_call>")
+    if num_turns == 0 :
+        return 0.0
+    else:
+        ratio = float(num_tools)/num_turns
+        if ratio > 1:
+            return ratio
+        else:
+            return 0.0

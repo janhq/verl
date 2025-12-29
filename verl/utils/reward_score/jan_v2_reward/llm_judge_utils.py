@@ -146,6 +146,7 @@ def call_llm_grader(question: str, target: str, predicted_answer: str) -> str:
                 "role": "user", "content": grader_prompt}],
             max_tokens=10,  # We only expect A, B, or C, plus a little buffer
             temperature=0.0,  # For deterministic grading
+            top_p=0.7,
         )
         llm_response_content = completion.choices[0].message.content
         if llm_response_content:

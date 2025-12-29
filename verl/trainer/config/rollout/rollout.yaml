@@ -160,10 +160,10 @@ multi_turn:
   max_user_turns: null
 
   # max parallel call for tools in single turn
-  max_parallel_calls: 1
+  max_parallel_calls: 10
 
   # max length of tool response
-  max_tool_response_length: 256
+  max_tool_response_length: 16384
 
   # truncate side of tool response: left, middle, right
   tool_response_truncate_side: middle

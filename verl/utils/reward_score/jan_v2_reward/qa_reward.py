@@ -2,7 +2,8 @@ import random
 import re
 import string
 from .llm_judge_utils import evaluate_answer
-from .format_reward import compute_format_reward
+from .format_reward import compute_format_reward, compute_bulk_tool_call_reward
+
 
 def normalize_answer(s):
     def remove_articles(text):
@@ -114,10 +115,12 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
         if evaluate_result['grade_description'] == "CORRECT":
             
             format_score = compute_format_reward(solution_str)
+            bulk_tool_score = compute_bulk_tool_call_reward(solution_str)
             print(f"Solution string with format score {format_score}: {solution_str}")
             if format_score == 0.0:
                 return 0.0
-            return 1.0 + format_score*0.2
+            return 1.0 + format_score*0.2 + bulk_tool_score* 0.2
+
         else:
             
             print(f"Solution string: {solution_str}")

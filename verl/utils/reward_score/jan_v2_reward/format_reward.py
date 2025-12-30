@@ -96,6 +96,7 @@ def compute_format_reward(solution_str):
             if i != j:
                 ratio = levenshtein.ratio(str2, str1)
                 if ratio > 0.9:
+
                     return 0.0
                 
 

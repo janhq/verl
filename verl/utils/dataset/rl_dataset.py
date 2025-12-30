@@ -53,6 +53,7 @@ When handling user queries:
 
 3 Never give an unclear answer immediately right after searching; try scraping different URLs to get more information.
 
+
 4. When you need to search for information, call the "web_search" tool using this exact XML format:
 <tool_call>
 {{"name": "web_search", "arguments": {{"query": "your search query here"}}}}

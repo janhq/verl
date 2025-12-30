@@ -1,8 +1,13 @@
-"""
-RAG Server 
-"""
-
 import os
+
+# Set CUDA device before importing torch - must be done first!
+cuda_device = os.environ.get("CUDA_DEVICE", None)
+if cuda_device is not None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_device
+else:
+    import random
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(random.randint(0, 1))
+
 import json
 import logging
 import argparse
@@ -25,14 +30,16 @@ from sentence_transformers import CrossEncoder
 from tqdm import tqdm
 from collections import defaultdict
 from bm25_index import BM25RetrieverLunce
+from utils import load_index
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-TOP_BM25_RETRIEVAL = 1000
+TOP_BM25_RETRIEVAL = 2000
+
 # Suppress some warnings
-import random
 warnings.filterwarnings("ignore", category=UserWarning)
-os.environ["CUDA_VISIBLE_DEVICES"] = str(random.randint(0,1))
+
 def load_corpus(corpus_path: str):
     """Load corpus using datasets library"""
     corpus = datasets.load_dataset(
@@ -162,69 +169,6 @@ class BaseRetriever:
     def batch_search(self, *args, **kwargs):
         return self._batch_search(*args, **kwargs)
 
-class BM25Retriever(BaseRetriever):
-    """BM25 retriever based on pre-built pyserini index."""
-
-    def __init__(self, config):
-        super().__init__(config)
-        from pyserini.search.lucene import LuceneSearcher
-        self.searcher = LuceneSearcher(self.index_path)
-        self.contain_doc = self._check_contain_doc()
-        if not self.contain_doc:
-            self.corpus = load_corpus(self.corpus_path)
-        self.max_process_num = 8
-        
-    def _check_contain_doc(self):
-        """Check if the index contains document content"""
-        return self.searcher.doc(0).raw() is not None
-
-    def _search(self, query: str, num: int = None, return_score: bool = False) -> List[Dict[str, str]]:
-        if num is None:
-            num = self.topk
-        
-        hits = self.searcher.search(query, num)
-        if len(hits) < 1:
-            if return_score:
-                return [], []
-            else:
-                return []
-            
-        scores = [hit.score for hit in hits]
-        if len(hits) < num:
-            warnings.warn('Not enough documents retrieved!')
-        else:
-            hits = hits[:num]
-
-        if self.contain_doc:
-            all_contents = [json.loads(self.searcher.doc(hit.docid).raw())['contents'] for hit in hits]
-            results = [
-                {
-                    'title': content.split("\n")[0].strip("\""), 
-                    'text': "\n".join(content.split("\n")[1:]),
-                    'contents': content
-                } 
-                for content in all_contents
-            ]
-        else:
-            results = load_docs(self.corpus, [hit.docid for hit in hits])
-
-        if return_score:
-            return results, scores
-        else:
-            return results
-
-    def _batch_search(self, query_list, num: int = None, return_score: bool = False):
-        results = []
-        scores = []
-        for query in query_list:
-            item_result, item_score = self._search(query, num, True)
-            results.append(item_result)
-            scores.append(item_score)
-
-        if return_score:
-            return results, scores
-        else:
-            return results
 
 class DenseRetriever(BaseRetriever):
     """Dense retriever based on pre-built faiss index."""
@@ -233,10 +177,14 @@ class DenseRetriever(BaseRetriever):
         super().__init__(config)
         self.index = faiss.read_index(self.index_path)
         if config.faiss_gpu:
-            co = faiss.GpuMultipleClonerOptions()
-            co.useFloat16 = True
-            co.shard = True
-            self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+            # Check if faiss-gpu is available
+            if hasattr(faiss, 'GpuMultipleClonerOptions'):
+                co = faiss.GpuMultipleClonerOptions()
+                co.useFloat16 = True
+                co.shard = True
+                self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+            else:
+                logger.warning("faiss-gpu not installed, falling back to CPU. Install faiss-gpu for GPU support.")
 
         self.corpus = load_corpus(self.corpus_path)
         self.encoder = Encoder(
@@ -305,11 +253,10 @@ class DenseRetriever(BaseRetriever):
             return results
 
 def get_retriever(config):
-    """Automatically select retriever class based on config's retrieval method"""
-    if config.retrieval_method == "bm25":
-        return BM25Retriever(config)
-    else:
-        return DenseRetriever(config)
+    """Get dense retriever (BM25 is handled separately via BM25RetrieverLunce)"""
+    # Note: BM25 is now handled by BM25RetrieverLunce (pure Python, no Java)
+    # This function only returns DenseRetriever
+    return DenseRetriever(config)
 
 class BaseCrossEncoder:
     def __init__(self, model, batch_size=32, device="cuda"):
@@ -404,7 +351,7 @@ class RetrieverConfig:
     retrieval_query_max_length: int = field(default=256)
     retrieval_use_fp16: bool = field(default=True)
     retrieval_batch_size: int = field(default=128)
-    retrieval_topk: int = field(default=10)
+    retrieval_topk: int = field(default=200)  # Get 35 for reranking
     index_path: str = field(default="indexes/dense/e5_base_v2.index")
     corpus_path: str = field(default="data/corpus/processed_corpus.jsonl")
     faiss_gpu: bool = field(default=True)
@@ -413,7 +360,7 @@ class RetrieverConfig:
 class RerankerConfig:
     """Configuration for reranker (from rerank_server.py)"""
     max_length: int = field(default=512)
-    rerank_topk: int = field(default=3)
+    rerank_topk: int = field(default=10)  # Return top 10 after reranking
     rerank_model_name_or_path: str = field(default="cross-encoder/ms-marco-MiniLM-L12-v2")
     batch_size: int = field(default=32)
     reranker_type: str = field(default="sentence_transformer")
@@ -434,8 +381,8 @@ def convert_title_format(text):
 
 class SearchRequest(BaseModel):
     queries: List[str]
-    topk_retrieval: Optional[int] = 10
-    topk_rerank: Optional[int] = 3
+    topk_retrieval: Optional[int] = 200  # Dense retrieval candidates for reranking
+    topk_rerank: Optional[int] = 10     # Final results after reranking
     return_scores: bool = False
 
 class SearchResponse(BaseModel):
@@ -444,6 +391,7 @@ class SearchResponse(BaseModel):
 
 class VisitRequest(BaseModel):
     url: str
+
 class HealthResponse(BaseModel):
     status: str
     pipeline_loaded: bool
@@ -466,37 +414,53 @@ retriever_config = None
 reranker_config = None
 bm25_retriever = None
 
+# Initialize configurations from environment variables
 retriever_config = RetrieverConfig(
-        retrieval_method="e5",
-        index_path="data/corpus/e5_Flat.index",
-        corpus_path="data/corpus/corpus.jsonl",
-        retrieval_topk=25,
-        faiss_gpu=False,
-        retrieval_model_path="intfloat/e5-base-v2",
-        retrieval_pooling_method="mean",
-        retrieval_query_max_length=256,
-        retrieval_use_fp16=True,
-        retrieval_batch_size=128,
-    )
-    
+    retrieval_method=os.environ.get("RETRIEVER_NAME", "e5"),
+    index_path=os.environ.get("INDEX_PATH", "data/corpus/e5_Flat.index"),
+    corpus_path=os.environ.get("CORPUS_PATH", "data/corpus/corpus.jsonl"),
+    retrieval_topk=int(os.environ.get("RETRIEVAL_TOPK", "35")),  # 35 candidates for reranking
+    faiss_gpu=os.environ.get("FAISS_GPU", "true").lower() == "true",
+    retrieval_model_path=os.environ.get("RETRIEVER_MODEL", "intfloat/e5-base-v2"),
+    retrieval_pooling_method=os.environ.get("RETRIEVAL_POOLING_METHOD", "mean"),
+    retrieval_query_max_length=int(os.environ.get("RETRIEVAL_QUERY_MAX_LENGTH", "256")),
+    retrieval_use_fp16=os.environ.get("RETRIEVAL_USE_FP16", "true").lower() == "true",
+    retrieval_batch_size=int(os.environ.get("RETRIEVAL_BATCH_SIZE", "128")),
+)
+
 reranker_config = RerankerConfig(
-        rerank_topk=10,
-        rerank_model_name_or_path="cross-encoder/ms-marco-MiniLM-L12-v2",
-        batch_size=64,
-    )
+    rerank_topk=int(os.environ.get("RERANKING_TOPK", "10")),  # Top 10 after reranking
+    rerank_model_name_or_path=os.environ.get("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L12-v2"),
+    batch_size=int(os.environ.get("RERANKER_BATCH_SIZE", "64")),
+)
 
 from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load the ML model
-    global retriever, reranker, retriever_config, reranker_config, bm25_retriever
+    global retriever, reranker, retriever_config, reranker_config, bm25_retriever, doc_store
     
     logger.info("Loading retrieval and reranking components...")
+    logger.info(f"Index path: {retriever_config.index_path}")
+    logger.info(f"Corpus path: {retriever_config.corpus_path}")
+    logger.info(f"CUDA device: {os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
     
-    # These configs will be set from command line arguments
+    # load json file mapping doc_id to full content
+    doc_store = load_index("./saved_index_data")
+
+    logger.info("Loading dense retriever...")
     retriever = get_retriever(retriever_config)
+    
+    # Load reranker
+    logger.info("Loading reranker...")
     reranker = get_reranker(reranker_config)
-    bm25_retriever = BM25RetrieverLunce(retriever_config.corpus_path)
+    
+    bm25_index_path = os.environ.get("BM25_INDEX_PATH", None)
+
+    bm25_cache_dir = os.environ.get("BM25_CACHE_DIR", retriever_config.corpus_path + "_bm25_cache")
+    logger.info(f"BM25 cache dir: {bm25_cache_dir}")
+    logger.info("Loading/Building BM25 index with bm25s...")
+    bm25_retriever = BM25RetrieverLunce(retriever.corpus, is_corpus=True, cache_dir=bm25_cache_dir)
     
     logger.info("FlashRAG pipeline initialized successfully")
     yield
@@ -522,14 +486,11 @@ async def startup_event():
 
 @app.post("/visit")
 async def visit(request: VisitRequest):
-    doc = retriever._get_doc(request.url.split("_")[-1])
-    content = doc["contents"]
-    title = content.split("\n")[0]
-    text = "\n".join(content.split("\n")[1:])
+    id = request.url.split("_")[-1]
     return {
         "result": [[{
-            "title": title,
-            "text": text
+            "title": doc_store.get(str(id))['title'],
+            "text": doc_store.get(str(id))['full_contents'],
         }]]
     }
     
@@ -545,49 +506,83 @@ async def search_endpoint(request: SearchRequest):
     try:
         start_time = time.time()
         
-        # step 0: get 1000 examples
-        
+        # get candidates using BM25 (using bm25s - pure Python)
         results_ids, _ = bm25_retriever._search(request.queries[0], TOP_BM25_RETRIEVAL)
         
-        # Step 1: Retrieve documents
+        # Retrieve documents
         retrieved_docs = retriever.batch_search(
-            query_list=request.queries,
-            num=request.topk_retrieval,
-            return_score=False,
-            search_indices = results_ids
-        )
+                    query_list=request.queries,
+                    num=request.topk_retrieval,
+                    return_score=False,
+                    search_indices=results_ids
+                )
 
-        # Step 2: Rerank documents
+        # Rerank documents
         reranked = reranker.rerank(request.queries, retrieved_docs)
-        # Step 3: Format response (following retrieval_rerank_server.py pattern)
+        
+        # Format response 
         response = []
         for i, doc_scores in reranked.items():
-            doc_scores = doc_scores[:request.topk_rerank]
-            if request.return_scores:
-                combined = []
-                for doc, score, doc_id in doc_scores:
-                    # Convert the document format
-                    converted_doc = convert_title_format(doc)
-                    # Parse back to structured format
-                    lines = converted_doc.split('\n', 1)
-                    title = lines[0].strip('"') if lines else "No title"
-                    text = lines[1] if len(lines) > 1 else ""
+            combined = []
+            seen_titles = set()
+            
+            for doc, score, doc_id in doc_scores:
+                if len(combined) >= request.topk_rerank:
+                    break
+                
+                converted_doc = convert_title_format(doc)
+                lines = converted_doc.split('\n', 1)
+                title = lines[0].strip('"') if lines else "No title"
+                
+                if title in seen_titles:
+                    continue
+                
+                seen_titles.add(title)
+                
+                text = lines[1] if len(lines) > 1 else ""
+                
+                doc_dict = {
+                    "doc_id": doc_id,
+                    "title": title,
+                    "text": text,
+                    "contents": converted_doc
+                }
+                
+                if request.return_scores:
+                    doc_dict["score"] = float(score)
+                
+                combined.append(doc_dict)
+            
+            # Safe check: if we don't have enough documents after reranking, retrieve more
+            if len(combined) < request.topk_rerank:
+                additional_needed = request.topk_rerank - len(combined)
+                additional_topk = request.topk_retrieval + (additional_needed * 10)
+                
+                # Retrieve additional documents
+                additional_docs = retriever.batch_search(
+                    query_list=[request.queries[i]],
+                    num=additional_topk,
+                    return_score=False,
+                    search_indices=results_ids
+                )
+                
+                # Rerank the additional documents
+                additional_reranked = reranker.rerank([request.queries[i]], additional_docs)
+                
+                # Add additional documents until we reach topk_rerank
+                for doc, score, doc_id in additional_reranked.get(0, []):
+                    if len(combined) >= request.topk_rerank:
+                        break
                     
-                    doc_dict = {
-                        "doc_id": doc_id,
-                        "title": title,
-                        "text": text,
-                        "contents": converted_doc,
-                        "score": float(score)
-                    }
-                    combined.append(doc_dict)
-                response.append(combined)
-            else:
-                formatted_docs = []
-                for doc, _, doc_id in doc_scores:
                     converted_doc = convert_title_format(doc)
                     lines = converted_doc.split('\n', 1)
                     title = lines[0].strip('"') if lines else "No title"
+                    
+                    if title in seen_titles:
+                        continue
+                    
+                    seen_titles.add(title)
+                    
                     text = lines[1] if len(lines) > 1 else ""
                     
                     doc_dict = {
@@ -596,8 +591,13 @@ async def search_endpoint(request: SearchRequest):
                         "text": text,
                         "contents": converted_doc
                     }
-                    formatted_docs.append(doc_dict)
-                response.append(formatted_docs)
+                    
+                    if request.return_scores:
+                        doc_dict["score"] = float(score)
+                    
+                    combined.append(doc_dict)
+            
+            response.append(combined)
         
         processing_time = time.time() - start_time
         
@@ -640,50 +640,75 @@ async def get_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
-# Main Function 
+# Main Function (for running with python directly)
 # ============================================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Launch FlashRAG-style server")
     
+    # CUDA device argument
+    parser.add_argument("--cuda_device", type=str, default=None, help="CUDA device to use (e.g., '0', '1', '0,1')")
+    
     # Retriever arguments
-    parser.add_argument("--index_path", type=str, default="data/corpus/e5_Flat.index", help="Corpus indexing file.")
-    parser.add_argument("--corpus_path", type=str, default="data/corpus/corpus.jsonl", help="Local corpus file.")
-    parser.add_argument("--retrieval_topk", type=int, default=25, help="Number of retrieved passages for one query.")
-    parser.add_argument("--retriever_name", type=str, default="e5", help="Name of the retriever model.")
-    parser.add_argument("--retriever_model", type=str, default="intfloat/e5-base-v2", help="Path of the retriever model.")
-    parser.add_argument('--faiss_gpu', action='store_true', default=True, help='Use GPU for computation')
+    parser.add_argument("--index_path", type=str, default=None, help="Corpus indexing file.")
+    parser.add_argument("--corpus_path", type=str, default=None, help="Local corpus file.")
+    parser.add_argument("--retrieval_topk", type=int, default=None, help="Number of retrieved passages for one query.")
+    parser.add_argument("--retriever_name", type=str, default=None, help="Name of the retriever model.")
+    parser.add_argument("--retriever_model", type=str, default=None, help="Path of the retriever model.")
+    parser.add_argument('--faiss_gpu', action='store_true', default=None, help='Use GPU for computation')
     
     # Reranker arguments  
-    parser.add_argument("--reranking_topk", type=int, default=10, help="Number of reranked passages for one query.")
-    parser.add_argument("--reranker_model", type=str, default="cross-encoder/ms-marco-MiniLM-L12-v2", help="Path of the reranker model.")
-    parser.add_argument("--reranker_batch_size", type=int, default=64, help="Batch size for the reranker inference.")
+    parser.add_argument("--reranking_topk", type=int, default=None, help="Number of reranked passages for one query.")
+    parser.add_argument("--reranker_model", type=str, default=None, help="Path of the reranker model.")
+    parser.add_argument("--reranker_batch_size", type=int, default=None, help="Batch size for the reranker inference.")
     
     # Server arguments
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     parser.add_argument("--port", type=int, default=2223, help="Server port")
     
-    args = parser.parse_args()
+    cmd_args = parser.parse_args()
     
-    # Initialize configurations
+    # Override environment variables with command line arguments if provided
+    if cmd_args.cuda_device is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = cmd_args.cuda_device
+    if cmd_args.index_path is not None:
+        os.environ["INDEX_PATH"] = cmd_args.index_path
+    if cmd_args.corpus_path is not None:
+        os.environ["CORPUS_PATH"] = cmd_args.corpus_path
+    if cmd_args.retrieval_topk is not None:
+        os.environ["RETRIEVAL_TOPK"] = str(cmd_args.retrieval_topk)
+    if cmd_args.retriever_name is not None:
+        os.environ["RETRIEVER_NAME"] = cmd_args.retriever_name
+    if cmd_args.retriever_model is not None:
+        os.environ["RETRIEVER_MODEL"] = cmd_args.retriever_model
+    if cmd_args.faiss_gpu is not None:
+        os.environ["FAISS_GPU"] = str(cmd_args.faiss_gpu).lower()
+    if cmd_args.reranking_topk is not None:
+        os.environ["RERANKING_TOPK"] = str(cmd_args.reranking_topk)
+    if cmd_args.reranker_model is not None:
+        os.environ["RERANKER_MODEL"] = cmd_args.reranker_model
+    if cmd_args.reranker_batch_size is not None:
+        os.environ["RERANKER_BATCH_SIZE"] = str(cmd_args.reranker_batch_size)
+    
+    # Reinitialize configs with updated environment variables
     retriever_config = RetrieverConfig(
-        retrieval_method=args.retriever_name,
-        index_path=args.index_path,
-        corpus_path=args.corpus_path,
-        retrieval_topk=args.retrieval_topk,
-        faiss_gpu=args.faiss_gpu,
-        retrieval_model_path=args.retriever_model,
-        retrieval_pooling_method="mean",
-        retrieval_query_max_length=256,
-        retrieval_use_fp16=True,
-        retrieval_batch_size=128,
+        retrieval_method=os.environ.get("RETRIEVER_NAME", "e5"),
+        index_path=os.environ.get("INDEX_PATH", "data/corpus/e5_Flat.index"),
+        corpus_path=os.environ.get("CORPUS_PATH", "data/corpus/corpus.jsonl"),
+        retrieval_topk=int(os.environ.get("RETRIEVAL_TOPK", "35")),  # 35 candidates for reranking
+        faiss_gpu=os.environ.get("FAISS_GPU", "true").lower() == "true",
+        retrieval_model_path=os.environ.get("RETRIEVER_MODEL", "intfloat/e5-base-v2"),
+        retrieval_pooling_method=os.environ.get("RETRIEVAL_POOLING_METHOD", "mean"),
+        retrieval_query_max_length=int(os.environ.get("RETRIEVAL_QUERY_MAX_LENGTH", "256")),
+        retrieval_use_fp16=os.environ.get("RETRIEVAL_USE_FP16", "true").lower() == "true",
+        retrieval_batch_size=int(os.environ.get("RETRIEVAL_BATCH_SIZE", "128")),
     )
     
     reranker_config = RerankerConfig(
-        rerank_topk=args.reranking_topk,
-        rerank_model_name_or_path=args.reranker_model,
-        batch_size=args.reranker_batch_size,
+        rerank_topk=int(os.environ.get("RERANKING_TOPK", "10")),  # Top 10 after reranking
+        rerank_model_name_or_path=os.environ.get("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L12-v2"),
+        batch_size=int(os.environ.get("RERANKER_BATCH_SIZE", "64")),
     )
     
     # Launch the server
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=cmd_args.host, port=cmd_args.port)

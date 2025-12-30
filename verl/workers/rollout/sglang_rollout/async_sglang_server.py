@@ -463,6 +463,7 @@ class SGLangHttpServer:
             "attention_backend": attention_backend if attention_backend is not None else "triton",
             "cuda_graph_max_bs" : 512,
             "skip_tokenizer_init": self.config.skip_tokenizer_init,
+            "cuda_graph_max_bs" : 512,
             "skip_server_warmup": True,
             "quantization": quantization,
             # "disable_cuda_graph": True,
@@ -511,12 +512,10 @@ class SGLangHttpServer:
         )
         app.is_single_tokenizer_mode = True
 
-        # Set warmup_thread_args to avoid AttributeError in lifespan function
-        app.warmup_thread_args = (
-            server_args,
-            None,
-            None,
-        )
+        # Set warmup_thread_{kw}args to avoid AttributeError in lifespan function
+        app.server_args = server_args
+        app.warmup_thread_kwargs = {"server_args": server_args}
+        app.warmup_thread_args = (server_args, None, None)
 
         # Manually add Prometheus middleware before starting server
         # This ensures /metrics endpoint is available immediately
@@ -562,7 +561,17 @@ class SGLangHttpServer:
     ) -> TokenOutput:
         """Generate sequence with token-in-token-out."""
         # TODO(@wuxibin): switch to `/generate` http endpoint once multi-modal support ready.
-        max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
+        response_length = min(self.config.response_length, self.config.max_model_len - len(prompt_ids) - 1)
+        if "max_new_tokens" in sampling_params:
+            max_new_tokens = sampling_params.pop("max_new_tokens")
+        elif "max_tokens" in sampling_params:
+            # support vllm-style 'max_tokens' param
+            max_new_tokens = sampling_params.pop("max_tokens")
+        else:
+            max_new_tokens = response_length
+        assert max_new_tokens <= response_length, (
+            f"max_new_tokens {max_new_tokens} exceeds available response_length {response_length}"
+        )
         sampling_params["max_new_tokens"] = max_new_tokens
         return_logprob = sampling_params.pop("logprobs", False)
 
@@ -573,8 +582,8 @@ class SGLangHttpServer:
             return_logprob=return_logprob,
             image_data=image_data,
         )
-        output = await self.tokenizer_manager.generate_request(request, None).__anext__()
-        print("########## OUTPUT", output)
+        output = await self.tokenizer_manager.generate_request(request, None).__anext__()        
+
         if return_logprob:
             output_token_logprobs = output["meta_info"]["output_token_logprobs"]
             log_probs, token_ids = zip(
@@ -583,6 +592,8 @@ class SGLangHttpServer:
         else:
             token_ids = output["output_ids"]
             log_probs = None
+        
+        
         return TokenOutput(token_ids=token_ids, log_probs=log_probs)
 
 

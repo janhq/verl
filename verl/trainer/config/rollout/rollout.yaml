@@ -160,10 +160,10 @@ multi_turn:
   max_user_turns: null
 
   # max parallel call for tools in single turn
-  max_parallel_calls: 1
+  max_parallel_calls: 10
 
   # max length of tool response
-  max_tool_response_length: 256
+  max_tool_response_length: 16384
 
   # truncate side of tool response: left, middle, right
   tool_response_truncate_side: middle
@@ -325,3 +325,8 @@ prometheus:
   # Specify served_model_name to avoid displaying overly long model paths in Grafana
   served_model_name: ${oc.select:actor_rollout_ref.model.path,null}
 
+# type of quantization in vllm, currently support fp8 and torchao
+quantization: null
+
+# extra quantization information serialized in a config file, e.g. torchao_config.json
+quantization_config_file: null

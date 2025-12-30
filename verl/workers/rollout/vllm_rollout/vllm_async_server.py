@@ -13,9 +13,11 @@
 # limitations under the License.
 import argparse
 import asyncio
+import inspect
 import json
 import logging
 import os
+from concurrent.futures import Future
 from pprint import pprint
 from typing import Any, Callable, Optional
 
@@ -35,8 +37,7 @@ from vllm.inputs import TokensPrompt
 from vllm.lora.request import LoRARequest
 from vllm.outputs import RequestOutput
 from vllm.usage.usage_lib import UsageContext
-from vllm.utils.argparse_utils import FlexibleArgumentParser
-from vllm.utils.network_utils import get_tcp_uri
+
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
@@ -55,6 +56,20 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_LORA_PATH,
     get_vllm_max_lora_rank,
 )
+
+if vllm.__version__ > "0.11.0":
+    from vllm.utils.argparse_utils import FlexibleArgumentParser
+    from vllm.utils.network_utils import get_tcp_uri
+
+    if vllm.__version__ == "0.12.0":
+        from vllm.entrypoints.harmony_utils import get_encoding
+
+        get_encoding()
+else:
+    from vllm.utils import FlexibleArgumentParser, get_tcp_uri
+if vllm.__version__ >= "0.12.0":
+    from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
+    from vllm.v1.outputs import ModelRunnerOutput
 
 logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
@@ -90,6 +105,30 @@ class ExternalZeroMQDistributedExecutor(Executor):
         self.collective_rpc("init_worker", args=([kwargs],))
         self.collective_rpc("init_device")
         self.collective_rpc("load_model")
+
+    if vllm.__version__ >= "0.12.0":
+
+        def execute_model(
+            self, scheduler_output: "SchedulerOutput", non_block: bool = False
+        ) -> "ModelRunnerOutput | None | Future[ModelRunnerOutput | None]":
+            output = self.collective_rpc("execute_model", args=(scheduler_output,))
+            result = output[0]
+            if non_block:
+                f = Future()
+                f.set_result(result)
+                return f
+            return result
+
+        def sample_tokens(
+            self, grammar_output: "GrammarOutput | None", non_block: bool = False
+        ) -> "ModelRunnerOutput | None | Future[ModelRunnerOutput | None]":
+            output = self.collective_rpc("sample_tokens", args=(grammar_output,))
+            result = output[0]
+            if non_block:
+                f = Future()
+                f.set_result(result)
+                return f
+            return result
 
     def collective_rpc(
         self,
@@ -217,6 +256,13 @@ class vLLMHttpServerBase:
             max_new_tokens=self.config.response_length,
         )
         logger.info(f"override_generation_config: {override_generation_config}")
+
+        logger.info(f"enable_sleep_mode: {self.config.enable_sleep_mode}")
+        if not self.config.enable_sleep_mode:
+            from verl.utils.device import set_expandable_segments
+
+            set_expandable_segments(True)
+
         quantization = self.config.quantization
         if quantization is not None:
             if quantization == "fp8":
@@ -225,6 +271,301 @@ class vLLMHttpServerBase:
                     "fmt": "e4m3",
                     "quant_method": "fp8",
                     "weight_block_size": [128, 128],
+                    "ignored_layers": [
+                        "lm_head",
+                        "model.visual.merger.linear_fc1",
+                        "model.visual.merger.linear_fc2",
+                        "model.visual.merger.norm",
+                        "model.visual.patch_embed.proj",
+                        "model.visual.pos_embed",
+                        "visual.merger.linear_fc1",
+                        "visual.merger.linear_fc2",
+                        "visual.merger.norm",
+                        "visual.patch_embed.proj",
+                        "visual.pos_embed",
+                        "model.visual.blocks.0.attn.proj",
+                        "model.visual.blocks.0.attn.qkv",
+                        "model.visual.blocks.0.mlp.linear_fc1",
+                        "model.visual.blocks.0.mlp.linear_fc2",
+                        "visual.blocks.0.attn.proj",
+                        "visual.blocks.0.attn.qkv_proj",
+                        "visual.blocks.0.mlp.linear_fc1",
+                        "visual.blocks.0.mlp.linear_fc2",
+                        "model.visual.blocks.1.attn.proj",
+                        "model.visual.blocks.1.attn.qkv",
+                        "model.visual.blocks.1.mlp.linear_fc1",
+                        "model.visual.blocks.1.mlp.linear_fc2",
+                        "visual.blocks.1.attn.proj",
+                        "visual.blocks.1.attn.qkv_proj",
+                        "visual.blocks.1.mlp.linear_fc1",
+                        "visual.blocks.1.mlp.linear_fc2",
+                        "model.visual.blocks.2.attn.proj",
+                        "model.visual.blocks.2.attn.qkv",
+                        "model.visual.blocks.2.mlp.linear_fc1",
+                        "model.visual.blocks.2.mlp.linear_fc2",
+                        "visual.blocks.2.attn.proj",
+                        "visual.blocks.2.attn.qkv_proj",
+                        "visual.blocks.2.mlp.linear_fc1",
+                        "visual.blocks.2.mlp.linear_fc2",
+                        "model.visual.blocks.3.attn.proj",
+                        "model.visual.blocks.3.attn.qkv",
+                        "model.visual.blocks.3.mlp.linear_fc1",
+                        "model.visual.blocks.3.mlp.linear_fc2",
+                        "visual.blocks.3.attn.proj",
+                        "visual.blocks.3.attn.qkv_proj",
+                        "visual.blocks.3.mlp.linear_fc1",
+                        "visual.blocks.3.mlp.linear_fc2",
+                        "model.visual.blocks.4.attn.proj",
+                        "model.visual.blocks.4.attn.qkv",
+                        "model.visual.blocks.4.mlp.linear_fc1",
+                        "model.visual.blocks.4.mlp.linear_fc2",
+                        "visual.blocks.4.attn.proj",
+                        "visual.blocks.4.attn.qkv_proj",
+                        "visual.blocks.4.mlp.linear_fc1",
+                        "visual.blocks.4.mlp.linear_fc2",
+                        "model.visual.blocks.5.attn.proj",
+                        "model.visual.blocks.5.attn.qkv",
+                        "model.visual.blocks.5.mlp.linear_fc1",
+                        "model.visual.blocks.5.mlp.linear_fc2",
+                        "visual.blocks.5.attn.proj",
+                        "visual.blocks.5.attn.qkv_proj",
+                        "visual.blocks.5.mlp.linear_fc1",
+                        "visual.blocks.5.mlp.linear_fc2",
+                        "model.visual.blocks.6.attn.proj",
+                        "model.visual.blocks.6.attn.qkv",
+                        "model.visual.blocks.6.mlp.linear_fc1",
+                        "model.visual.blocks.6.mlp.linear_fc2",
+                        "visual.blocks.6.attn.proj",
+                        "visual.blocks.6.attn.qkv_proj",
+                        "visual.blocks.6.mlp.linear_fc1",
+                        "visual.blocks.6.mlp.linear_fc2",
+                        "model.visual.blocks.7.attn.proj",
+                        "model.visual.blocks.7.attn.qkv",
+                        "model.visual.blocks.7.mlp.linear_fc1",
+                        "model.visual.blocks.7.mlp.linear_fc2",
+                        "visual.blocks.7.attn.proj",
+                        "visual.blocks.7.attn.qkv_proj",
+                        "visual.blocks.7.mlp.linear_fc1",
+                        "visual.blocks.7.mlp.linear_fc2",
+                        "model.visual.blocks.8.attn.proj",
+                        "model.visual.blocks.8.attn.qkv",
+                        "model.visual.blocks.8.mlp.linear_fc1",
+                        "model.visual.blocks.8.mlp.linear_fc2",
+                        "visual.blocks.8.attn.proj",
+                        "visual.blocks.8.attn.qkv_proj",
+                        "visual.blocks.8.mlp.linear_fc1",
+                        "visual.blocks.8.mlp.linear_fc2",
+                        "model.visual.blocks.9.attn.proj",
+                        "model.visual.blocks.9.attn.qkv",
+                        "model.visual.blocks.9.mlp.linear_fc1",
+                        "model.visual.blocks.9.mlp.linear_fc2",
+                        "visual.blocks.9.attn.proj",
+                        "visual.blocks.9.attn.qkv_proj",
+                        "visual.blocks.9.mlp.linear_fc1",
+                        "visual.blocks.9.mlp.linear_fc2",
+                        "model.visual.blocks.10.attn.proj",
+                        "model.visual.blocks.10.attn.qkv",
+                        "model.visual.blocks.10.mlp.linear_fc1",
+                        "model.visual.blocks.10.mlp.linear_fc2",
+                        "visual.blocks.10.attn.proj",
+                        "visual.blocks.10.attn.qkv_proj",
+                        "visual.blocks.10.mlp.linear_fc1",
+                        "visual.blocks.10.mlp.linear_fc2",
+                        "model.visual.blocks.11.attn.proj",
+                        "model.visual.blocks.11.attn.qkv",
+                        "model.visual.blocks.11.mlp.linear_fc1",
+                        "model.visual.blocks.11.mlp.linear_fc2",
+                        "visual.blocks.11.attn.proj",
+                        "visual.blocks.11.attn.qkv_proj",
+                        "visual.blocks.11.mlp.linear_fc1",
+                        "visual.blocks.11.mlp.linear_fc2",
+                        "model.visual.blocks.12.attn.proj",
+                        "model.visual.blocks.12.attn.qkv",
+                        "model.visual.blocks.12.mlp.linear_fc1",
+                        "model.visual.blocks.12.mlp.linear_fc2",
+                        "visual.blocks.12.attn.proj",
+                        "visual.blocks.12.attn.qkv_proj",
+                        "visual.blocks.12.mlp.linear_fc1",
+                        "visual.blocks.12.mlp.linear_fc2",
+                        "model.visual.blocks.13.attn.proj",
+                        "model.visual.blocks.13.attn.qkv",
+                        "model.visual.blocks.13.mlp.linear_fc1",
+                        "model.visual.blocks.13.mlp.linear_fc2",
+                        "visual.blocks.13.attn.proj",
+                        "visual.blocks.13.attn.qkv_proj",
+                        "visual.blocks.13.mlp.linear_fc1",
+                        "visual.blocks.13.mlp.linear_fc2",
+                        "model.visual.blocks.14.attn.proj",
+                        "model.visual.blocks.14.attn.qkv",
+                        "model.visual.blocks.14.mlp.linear_fc1",
+                        "model.visual.blocks.14.mlp.linear_fc2",
+                        "visual.blocks.14.attn.proj",
+                        "visual.blocks.14.attn.qkv_proj",
+                        "visual.blocks.14.mlp.linear_fc1",
+                        "visual.blocks.14.mlp.linear_fc2",
+                        "model.visual.blocks.15.attn.proj",
+                        "model.visual.blocks.15.attn.qkv",
+                        "model.visual.blocks.15.mlp.linear_fc1",
+                        "model.visual.blocks.15.mlp.linear_fc2",
+                        "visual.blocks.15.attn.proj",
+                        "visual.blocks.15.attn.qkv_proj",
+                        "visual.blocks.15.mlp.linear_fc1",
+                        "visual.blocks.15.mlp.linear_fc2",
+                        "model.visual.blocks.16.attn.proj",
+                        "model.visual.blocks.16.attn.qkv",
+                        "model.visual.blocks.16.mlp.linear_fc1",
+                        "model.visual.blocks.16.mlp.linear_fc2",
+                        "visual.blocks.16.attn.proj",
+                        "visual.blocks.16.attn.qkv_proj",
+                        "visual.blocks.16.mlp.linear_fc1",
+                        "visual.blocks.16.mlp.linear_fc2",
+                        "model.visual.blocks.17.attn.proj",
+                        "model.visual.blocks.17.attn.qkv",
+                        "model.visual.blocks.17.mlp.linear_fc1",
+                        "model.visual.blocks.17.mlp.linear_fc2",
+                        "visual.blocks.17.attn.proj",
+                        "visual.blocks.17.attn.qkv_proj",
+                        "visual.blocks.17.mlp.linear_fc1",
+                        "visual.blocks.17.mlp.linear_fc2",
+                        "model.visual.blocks.18.attn.proj",
+                        "model.visual.blocks.18.attn.qkv",
+                        "model.visual.blocks.18.mlp.linear_fc1",
+                        "model.visual.blocks.18.mlp.linear_fc2",
+                        "visual.blocks.18.attn.proj",
+                        "visual.blocks.18.attn.qkv_proj",
+                        "visual.blocks.18.mlp.linear_fc1",
+                        "visual.blocks.18.mlp.linear_fc2",
+                        "model.visual.blocks.19.attn.proj",
+                        "model.visual.blocks.19.attn.qkv",
+                        "model.visual.blocks.19.mlp.linear_fc1",
+                        "model.visual.blocks.19.mlp.linear_fc2",
+                        "visual.blocks.19.attn.proj",
+                        "visual.blocks.19.attn.qkv_proj",
+                        "visual.blocks.19.mlp.linear_fc1",
+                        "visual.blocks.19.mlp.linear_fc2",
+                        "model.visual.blocks.20.attn.proj",
+                        "model.visual.blocks.20.attn.qkv",
+                        "model.visual.blocks.20.mlp.linear_fc1",
+                        "model.visual.blocks.20.mlp.linear_fc2",
+                        "visual.blocks.20.attn.proj",
+                        "visual.blocks.20.attn.qkv_proj",
+                        "visual.blocks.20.mlp.linear_fc1",
+                        "visual.blocks.20.mlp.linear_fc2",
+                        "model.visual.blocks.21.attn.proj",
+                        "model.visual.blocks.21.attn.qkv",
+                        "model.visual.blocks.21.mlp.linear_fc1",
+                        "model.visual.blocks.21.mlp.linear_fc2",
+                        "visual.blocks.21.attn.proj",
+                        "visual.blocks.21.attn.qkv_proj",
+                        "visual.blocks.21.mlp.linear_fc1",
+                        "visual.blocks.21.mlp.linear_fc2",
+                        "model.visual.blocks.22.attn.proj",
+                        "model.visual.blocks.22.attn.qkv",
+                        "model.visual.blocks.22.mlp.linear_fc1",
+                        "model.visual.blocks.22.mlp.linear_fc2",
+                        "visual.blocks.22.attn.proj",
+                        "visual.blocks.22.attn.qkv_proj",
+                        "visual.blocks.22.mlp.linear_fc1",
+                        "visual.blocks.22.mlp.linear_fc2",
+                        "model.visual.blocks.23.attn.proj",
+                        "model.visual.blocks.23.attn.qkv",
+                        "model.visual.blocks.23.mlp.linear_fc1",
+                        "model.visual.blocks.23.mlp.linear_fc2",
+                        "visual.blocks.23.attn.proj",
+                        "visual.blocks.23.attn.qkv_proj",
+                        "visual.blocks.23.mlp.linear_fc1",
+                        "visual.blocks.23.mlp.linear_fc2",
+                        "model.visual.blocks.24.attn.proj",
+                        "model.visual.blocks.24.attn.qkv",
+                        "model.visual.blocks.24.mlp.linear_fc1",
+                        "model.visual.blocks.24.mlp.linear_fc2",
+                        "visual.blocks.24.attn.proj",
+                        "visual.blocks.24.attn.qkv_proj",
+                        "visual.blocks.24.mlp.linear_fc1",
+                        "visual.blocks.24.mlp.linear_fc2",
+                        "model.visual.blocks.25.attn.proj",
+                        "model.visual.blocks.25.attn.qkv",
+                        "model.visual.blocks.25.mlp.linear_fc1",
+                        "model.visual.blocks.25.mlp.linear_fc2",
+                        "visual.blocks.25.attn.proj",
+                        "visual.blocks.25.attn.qkv_proj",
+                        "visual.blocks.25.mlp.linear_fc1",
+                        "visual.blocks.25.mlp.linear_fc2",
+                        "model.visual.blocks.26.attn.proj",
+                        "model.visual.blocks.26.attn.qkv",
+                        "model.visual.blocks.26.mlp.linear_fc1",
+                        "model.visual.blocks.26.mlp.linear_fc2",
+                        "visual.blocks.26.attn.proj",
+                        "visual.blocks.26.attn.qkv_proj",
+                        "visual.blocks.26.mlp.linear_fc1",
+                        "visual.blocks.26.mlp.linear_fc2",
+                        "model.visual.deepstack_merger_list.0.linear_fc1",
+                        "model.visual.deepstack_merger_list.0.linear_fc2",
+                        "model.visual.deepstack_merger_list.0.norm",
+                        "visual.deepstack_merger_list.0.linear_fc1",
+                        "visual.deepstack_merger_list.0.linear_fc2",
+                        "visual.deepstack_merger_list.0.norm",
+                        "model.visual.deepstack_merger_list.1.linear_fc1",
+                        "model.visual.deepstack_merger_list.1.linear_fc2",
+                        "model.visual.deepstack_merger_list.1.norm",
+                        "visual.deepstack_merger_list.1.linear_fc1",
+                        "visual.deepstack_merger_list.1.linear_fc2",
+                        "visual.deepstack_merger_list.1.norm",
+                        "model.visual.deepstack_merger_list.2.linear_fc1",
+                        "model.visual.deepstack_merger_list.2.linear_fc2",
+                        "model.visual.deepstack_merger_list.2.norm",
+                        "visual.deepstack_merger_list.2.linear_fc1",
+                        "visual.deepstack_merger_list.2.linear_fc2",
+                        "visual.deepstack_merger_list.2.norm",
+                        "model.language_model.layers.0.mlp.gate",
+                        "model.language_model.layers.1.mlp.gate",
+                        "model.language_model.layers.2.mlp.gate",
+                        "model.language_model.layers.3.mlp.gate",
+                        "model.language_model.layers.4.mlp.gate",
+                        "model.language_model.layers.5.mlp.gate",
+                        "model.language_model.layers.6.mlp.gate",
+                        "model.language_model.layers.7.mlp.gate",
+                        "model.language_model.layers.8.mlp.gate",
+                        "model.language_model.layers.9.mlp.gate",
+                        "model.language_model.layers.10.mlp.gate",
+                        "model.language_model.layers.11.mlp.gate",
+                        "model.language_model.layers.12.mlp.gate",
+                        "model.language_model.layers.13.mlp.gate",
+                        "model.language_model.layers.14.mlp.gate",
+                        "model.language_model.layers.15.mlp.gate",
+                        "model.language_model.layers.16.mlp.gate",
+                        "model.language_model.layers.17.mlp.gate",
+                        "model.language_model.layers.18.mlp.gate",
+                        "model.language_model.layers.19.mlp.gate",
+                        "model.language_model.layers.20.mlp.gate",
+                        "model.language_model.layers.21.mlp.gate",
+                        "model.language_model.layers.22.mlp.gate",
+                        "model.language_model.layers.23.mlp.gate",
+                        "model.language_model.layers.24.mlp.gate",
+                        "model.language_model.layers.25.mlp.gate",
+                        "model.language_model.layers.26.mlp.gate",
+                        "model.language_model.layers.27.mlp.gate",
+                        "model.language_model.layers.28.mlp.gate",
+                        "model.language_model.layers.29.mlp.gate",
+                        "model.language_model.layers.30.mlp.gate",
+                        "model.language_model.layers.31.mlp.gate",
+                        "model.language_model.layers.32.mlp.gate",
+                        "model.language_model.layers.33.mlp.gate",
+                        "model.language_model.layers.34.mlp.gate",
+                        "model.language_model.layers.35.mlp.gate",
+                        "model.language_model.layers.36.mlp.gate",
+                        "model.language_model.layers.37.mlp.gate",
+                        "model.language_model.layers.38.mlp.gate",
+                        "model.language_model.layers.39.mlp.gate",
+                        "model.language_model.layers.40.mlp.gate",
+                        "model.language_model.layers.41.mlp.gate",
+                        "model.language_model.layers.42.mlp.gate",
+                        "model.language_model.layers.43.mlp.gate",
+                        "model.language_model.layers.44.mlp.gate",
+                        "model.language_model.layers.45.mlp.gate",
+                        "model.language_model.layers.46.mlp.gate",
+                        "model.language_model.layers.47.mlp.gate"
+                        ],
                 }
                 fp8_block_quant_kwargs = dict(FP8_BLOCK_QUANT_KWARGS)
                 # Apply vllm fp8 patches
@@ -242,7 +583,7 @@ class vLLMHttpServerBase:
             "enable_chunked_prefill": self.config.enable_chunked_prefill,
             "max_num_batched_tokens": self.config.max_num_batched_tokens,
             "enable_prefix_caching": self.config.enable_prefix_caching,
-            "enable_sleep_mode": True,
+            "enable_sleep_mode": self.config.enable_sleep_mode,
             "disable_custom_all_reduce": True,
             "enforce_eager": self.config.enforce_eager,
             "gpu_memory_utilization": self.config.gpu_memory_utilization,
@@ -348,18 +689,23 @@ class vLLMHttpServerBase:
         vllm_config = engine_args.create_engine_config(usage_context=usage_context)
         vllm_config.parallel_config.data_parallel_master_port = self._dp_master_port
 
-        engine_client = AsyncLLM.from_vllm_config(
-            vllm_config=vllm_config,
-            usage_context=usage_context,
-            disable_log_requests=engine_args.disable_log_requests,
-            disable_log_stats=engine_args.disable_log_stats,
-        )
+        fn_args = set(dict(inspect.signature(AsyncLLM.from_vllm_config).parameters).keys())
+        kwargs = {}
+        if "enable_log_requests" in fn_args:
+            kwargs["enable_log_requests"] = engine_args.enable_log_requests
+        if "disable_log_stats" in fn_args:
+            kwargs["disable_log_stats"] = engine_args.disable_log_stats
+
+        engine_client = AsyncLLM.from_vllm_config(vllm_config=vllm_config, usage_context=usage_context, **kwargs)
 
         # Don't keep the dummy data in memory
         await engine_client.reset_mm_cache()
 
         app = build_app(args)
-        await init_app_state(engine_client, vllm_config, app.state, args)
+        if vllm.__version__ > "0.11.0":
+            await init_app_state(engine_client, app.state, args)
+        else:
+            await init_app_state(engine_client, vllm_config, app.state, args)
         if self.replica_rank == 0 and self.node_rank == 0:
             logger.info(f"Initializing a V1 LLM engine with config: {vllm_config}")
 
@@ -439,7 +785,18 @@ class vLLMHttpServerBase:
         if self.config.enable_rollout_routing_replay:
             routed_experts = final_res.outputs[0].routed_experts
 
-        return TokenOutput(token_ids=token_ids, log_probs=log_probs, routed_experts=routed_experts)
+        # Determine stop reason from finish_reason
+        finish_reason = final_res.outputs[0].finish_reason
+        if finish_reason == "abort":
+            stop_reason = "aborted"
+        elif finish_reason in ("stop", "length"):
+            stop_reason = "completed"
+        else:
+            stop_reason = finish_reason  # for more stop reason in the future
+
+        return TokenOutput(
+            token_ids=token_ids, log_probs=log_probs, routed_experts=routed_experts, stop_reason=stop_reason
+        )
 
     async def wake_up(self):
         if self.rollout_mode == RolloutMode.HYBRID:
@@ -470,6 +827,88 @@ class vLLMHttpServerBase:
 
     async def wait_for_requests_to_drain(self):
         await self.engine.wait_for_requests_to_drain()
+
+    async def abort_all_requests(self, reset_prefix_cache: bool = True) -> dict[str, Any]:
+        """Abort all ongoing generation requests.
+
+        Returns:
+            dict[str, Any]: Dictionary containing:
+                - aborted_count: Number of requests aborted
+                - request_ids: List of aborted request IDs
+        """
+        try:
+            # Take an atomic snapshot to avoid race conditions with the vLLM engine thread
+            request_states_snapshot = list(self.engine.output_processor.request_states.items())
+            request_ids = [req_id for req_id, _ in request_states_snapshot]
+
+            if not request_ids:
+                return {"aborted_count": 0, "request_ids": []}
+
+            # For each request, create an abort output and put it to its queue
+            # This allows the generator to receive the aborted result
+            from vllm.v1.engine import FinishReason
+
+            for _, req_state in request_states_snapshot:
+                request_output = req_state.make_request_output(
+                    [], pooling_output=None, finish_reason=FinishReason.ABORT, stop_reason=None
+                )
+                req_state.queue.put(request_output)
+
+            # Abort requests in the output processor and engine core
+            self.engine.output_processor.abort_requests(request_ids)
+            await self.engine.engine_core.abort_requests_async(request_ids)
+
+            # Try to reset prefix cache to ensure clean state
+            if reset_prefix_cache:
+                await self.clear_kv_cache()
+                logger.info("Prefix cache reset after abort")
+
+            logger.info(f"Aborted {len(request_ids)} requests: {request_ids}")
+            return {"aborted_count": len(request_ids), "request_ids": request_ids}
+
+        except Exception as e:
+            logger.error(f"Error aborting requests: {e}")
+            return {"aborted_count": 0, "request_ids": [], "error": str(e)}
+
+    async def abort_request(self, request_id: str, reset_prefix_cache: bool = True) -> dict[str, Any]:
+        """Abort a specific generation request.
+
+        Args:
+            request_id: The ID of the request to abort.
+
+        Returns:
+            dict[str, Any]: Dictionary containing abort result.
+        """
+        try:
+            request_states = self.engine.output_processor.request_states
+            req_state = request_states.get(request_id)
+
+            if req_state is None:
+                return {"aborted": False, "error": f"Request {request_id} not found"}
+
+            # Create abort output and put it to the queue
+            from vllm.v1.engine import FinishReason
+
+            request_output = req_state.make_request_output(
+                [], pooling_output=None, finish_reason=FinishReason.ABORT, stop_reason=None
+            )
+            req_state.queue.put(request_output)
+
+            # Abort in output processor and engine core
+            self.engine.output_processor.abort_requests([request_id])
+            await self.engine.engine_core.abort_requests_async([request_id])
+
+            # Try to reset prefix cache to ensure clean state
+            if reset_prefix_cache:
+                await self.clear_kv_cache()
+                logger.info(f"Prefix cache reset after abort request {request_id}")
+
+            logger.info(f"Aborted request: {request_id}")
+            return {"aborted": True, "request_id": request_id}
+
+        except Exception as e:
+            logger.error(f"Error aborting request {request_id}: {e}")
+            return {"aborted": False, "request_id": request_id, "error": str(e)}
 
 
 @ray.remote(num_cpus=1)
@@ -589,6 +1028,43 @@ class vLLMReplica(RolloutReplica):
         # Drain DP engines for safe sleep.
         await self.servers[0].wait_for_requests_to_drain.remote()
         await asyncio.gather(*[server.sleep.remote() for server in self.servers])
+
+    async def abort_all_requests(self) -> dict[str, Any]:
+        """Abort all ongoing generation requests across all servers.
+
+        Returns:
+            dict[str, Any]: Combined abort results from all servers.
+        """
+        results = await asyncio.gather(*[server.abort_all_requests.remote() for server in self.servers])
+
+        total_aborted = sum(r.get("aborted_count", 0) for r in results)
+        all_request_ids = []
+        for r in results:
+            all_request_ids.extend(r.get("request_ids", []))
+
+        return {
+            "aborted_count": total_aborted,
+            "request_ids": all_request_ids,
+            "server_results": results,
+        }
+
+    async def abort_request(self, request_id: str) -> dict[str, Any]:
+        """Abort a specific request. Tries all servers since we don't know which one has it.
+
+        Args:
+            request_id: The ID of the request to abort.
+
+        Returns:
+            dict[str, Any]: Abort result.
+        """
+        # TODO(petersh6): we should only abort on the server that has the request.
+        results = await asyncio.gather(*[server.abort_request.remote(request_id) for server in self.servers])
+
+        for r in results:
+            if r.get("aborted", False):
+                return r
+
+        return {"aborted": False, "request_id": request_id, "error": "Request not found on any server"}
 
 
 def _qwen2_5_vl_dedup_image_tokens(prompt_ids: list[int], processor):

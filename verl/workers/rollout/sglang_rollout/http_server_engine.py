@@ -476,6 +476,7 @@ class HttpServerAdapter(EngineBase):
             "custom_logit_processor": custom_logit_processor,
         }
         # Filter out None values
+        print ("##### PAYLOAD", payload)
         payload = {k: v for k, v in payload.items() if v is not None}
 
         return self._make_request("generate", payload, only_master=False)
@@ -837,13 +838,13 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
             "lora_path": lora_path,
             "custom_logit_processor": custom_logit_processor,
         }
-
+        print("######## PAYLOAD",payload)
         # Filter out None values
         payload = {k: v for k, v in payload.items() if v is not None}
 
         # Send request
         response = await self._make_async_request("generate", payload, timeout=self.timeout, only_master=False)
-
+        print("######## RESPONSE",response)
         return response
 
     async def async_generate(

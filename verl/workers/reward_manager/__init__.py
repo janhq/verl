@@ -17,9 +17,9 @@ from .batch import BatchRewardManager
 from .dapo import DAPORewardManager
 from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
-from .semantic_novelty import SemanticTTRLRewardManager
+# from .semantic_novelty import SemanticTTRLRewardManager
 from .hf_math_verify import MathVerifyRewardManager
-from .yr_code import YRRewardManager
+# from .yr_code import YRRewardManager
 
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
@@ -27,16 +27,16 @@ __all__ = [
     "DAPORewardManager",
     "NaiveRewardManager",
     "PrimeRewardManager",
-    "SemanticTTRLRewardManager",
+    # "SemanticTTRLRewardManager",
     "MathVerifyRewardManager",
-    "YRRewardManager",
+    # "YRRewardManager",
     "register",
     "get_reward_manager_cls",
 ]
 
 # Import experimental reward managers to ensure they are registered
 try:
-    from verl.experimental.reward.reward_loop.limited import RateLimitedRewardLoopManager  # noqa: F401
+    from verl.experimental.reward.reward_manager.limited import RateLimitedRewardLoopManager  # noqa: F401
 
     __all__.append("RateLimitedRewardLoopManager")
 except ImportError:

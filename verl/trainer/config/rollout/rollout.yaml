@@ -160,10 +160,10 @@ multi_turn:
   max_user_turns: null
 
   # max parallel call for tools in single turn
-  max_parallel_calls: 1
+  max_parallel_calls: 10
 
   # max length of tool response
-  max_tool_response_length: 256
+  max_tool_response_length: 16384
 
   # truncate side of tool response: left, middle, right
   tool_response_truncate_side: middle
@@ -174,7 +174,7 @@ multi_turn:
   # - When set to True, the model's default chat template is used for multi-turn rollout, which typically matches production behavior.
   # - When set to False, the token ids recorded for training are used instead; unlike the default chat template, these always include the model's full output,
   #   which may contain additional content such as reasoning content. This maintains the consistency between training and rollout, but it will lead to longer prompts.
-  use_inference_chat_template: False
+  use_inference_chat_template: True
 
   # Tokenization is performed turn by turn and the resulting token ids are concatenated to form the full conversation.
   # To ensure this matches the result of tokenizing the entire conversation at once, a sanity check is run at the end of each multi-turn rollout to compare the two sets of token ids.
@@ -206,7 +206,7 @@ agent:
   num_workers: 8
 
   # default agent loop to use if `agent_name` not set in RL dataset
-  default_agent_loop: single_turn_agent
+  default_agent_loop: tool_agent
 
   # custom agent loop config path, which should contain list of configs to intialize AgentLoop instances.
   # https://hydra.cc/docs/advanced/instantiate_objects/overview/

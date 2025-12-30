@@ -4,6 +4,7 @@ import string
 from .llm_judge_utils import evaluate_answer
 from .format_reward import compute_format_reward, compute_bulk_tool_call_reward
 
+
 def normalize_answer(s):
     def remove_articles(text):
         return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -119,6 +120,7 @@ def compute_score(solution_str, ground_truth, question, format_score=0.0, score=
             if format_score == 0.0:
                 return 0.0
             return 1.0 + format_score*0.2 + bulk_tool_score* 0.2
+
         else:
             
             print(f"Solution string: {solution_str}")

@@ -98,6 +98,7 @@ def compute_format_reward(solution_str):
                 if ratio > 0.9:
                     return 0.0
                 
+
     length = [len(x.split(" ")) for x in assistant_thoughts]
     if len(length):
         avg_length = float(sum(length))/len(length)
@@ -117,3 +118,4 @@ def compute_bulk_tool_call_reward(solution_str):
             return ratio
         else:
             return 0.0
+

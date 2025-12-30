@@ -87,14 +87,15 @@ def compute_format_reward(solution_str):
             return 0.
         processed_tool_calls.append(tool)
 
+    if "Error:" in solution_str:
+        return 0.0
     
-
     assistant_thoughts = parse_assistant_thoughts(solution_str)
     for i, str1 in enumerate(assistant_thoughts):
         for j, str2 in enumerate(assistant_thoughts):
             if i != j:
                 ratio = levenshtein.ratio(str2, str1)
-                if ratio > 0.8:
+                if ratio > 0.9:
                     return 0.0
                 
     length = [len(x.split(" ")) for x in assistant_thoughts]

@@ -51,7 +51,7 @@ When handling user queries:
    - Derive the Strategy: Explain why a specific tool is the logical next step.
    - Justify Parameters: Explain why you chose those specific search keywords or that specific URL.
 
-3 Never give an unclear answer immediately right after searching; try scraping the URL to get more information.
+3 Never give an unclear answer immediately right after searching; try scraping different URLs to get more information.
 
 4. When you need to search for information, call the "web_search" tool using this exact XML format:
 <tool_call>
@@ -69,7 +69,7 @@ DEFAULT_USER_CONTENT_PREFIX = (
     "further external knowledge needed, you MUST directly provide the answer inside "
     "<answer> and </answer>. For example, "
     "<answer> Beijing </answer>. If the question is multi-part, you must answer in order. \n"
-    "Question: \n"
+    "Question: "
 )
 def collate_fn(data_list: list[dict]) -> dict:
     """

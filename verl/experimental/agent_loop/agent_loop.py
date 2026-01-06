@@ -46,6 +46,7 @@ from verl.utils.rollout_trace import (
 )
 from verl.utils.transferqueue_utils import tqbridge
 from verl.workers.rollout.replica import TokenOutput, get_rollout_replica_class
+from verl.utils.torch_functional import get_response_mask
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -377,7 +378,7 @@ class AgentLoopWorkerBase:
             )
         outputs = await asyncio.gather(*tasks)
 
-        output = self._postprocess(outputs)
+        output = self._postprocess(outputs, teacher_response=batch.batch.get("teacher_response"))
 
         return output
 
@@ -539,7 +540,7 @@ class AgentLoopWorkerBase:
         enable_async_reward = (
             self.reward_router_address is not None and self.config.reward_model.enable_resource_pool
         ) or not self.config.reward_model.enable
-        if output.reward_score is None and enable_async_reward and self.use_reward_loop:
+        if output.reward_score is None and enable_async_reward and self.use_reward_loop and os.environ.get("TRAIN_GAD") != "ON":
             batch = TensorDict(
                 {
                     "prompts": prompt_output["input_ids"],  # [1, prompt_length]
@@ -581,7 +582,7 @@ class AgentLoopWorkerBase:
             extra_fields=output.extra_fields,
         )
 
-    def _postprocess(self, inputs: list[_InternalAgentLoopOutput]) -> DataProto:
+    def _postprocess(self, inputs: list[_InternalAgentLoopOutput], teacher_response = None) -> DataProto:
         """Process the padded outputs from _run_agent_loop and combine them into a batch."""
         # Convert lists back to tensors and stack them to create a batch.
         prompt_ids = torch.cat([input.prompt_ids for input in inputs], dim=0)
@@ -595,20 +596,53 @@ class AgentLoopWorkerBase:
             optional_outputs["rollout_log_probs"] = torch.cat([input.response_logprobs for input in inputs], dim=0)
         if inputs[0].routed_experts is not None:
             optional_outputs["routed_experts"] = torch.cat([input.routed_experts for input in inputs], dim=0)
+        if os.environ.get("TRAIN_GAD") == "ON":
+            assert teacher_response is not None, "When training GAD, teacher response should not None"
+            teacher_seq = torch.cat([prompt_ids, teacher_response], dim=-1)
+            batch_size = prompt_ids.size(0)
+            prompt_position_ids = position_ids[...,:prompt_ids.size(-1)]
+            prompt_attention_mask = attention_mask[...,:prompt_ids.size(-1)]
+            teacher_response_length = teacher_response.size(1)
+            teacher_delta_position_id = torch.arange(1, teacher_response_length + 1, device=position_ids.device)
+            teacher_delta_position_id = teacher_delta_position_id.unsqueeze(0).expand(batch_size, -1)
 
-        batch = TensorDict(
-            {
-                "prompts": prompt_ids,  # [bsz, prompt_length]
-                "responses": response_ids,  # [bsz, response_length]
-                "response_mask": response_mask,  # [bsz, response_length]
-                "input_ids": input_ids,  # [bsz, prompt_length + response_length]
-                "attention_mask": attention_mask,  # [bsz, prompt_length + response_length]
-                # position_ids: [bsz, 3, prompt_length + response_length] or [bsz, prompt_length + response_length]
-                "position_ids": position_ids,
-                **optional_outputs,
-            },
-            batch_size=len(inputs),
-        )
+            teacher_response_position_ids = prompt_position_ids[..., -1:] + teacher_delta_position_id
+            teacher_position_ids = torch.cat([prompt_position_ids, teacher_response_position_ids], dim=-1)
+            teacher_response_attention_mask = get_response_mask(response_id=teacher_response, eos_token=self.tokenizer.eos_token_id, dtype=attention_mask.dtype)
+            teacher_attention_mask = torch.cat((prompt_attention_mask, teacher_response_attention_mask), dim=-1)
+
+
+            batch = TensorDict(
+                {
+                    "prompts": prompt_ids,  # [bsz, prompt_length]
+                    "responses": response_ids,  # [bsz, response_length]
+                    "response_mask": response_mask,  # [bsz, response_length]
+                    "input_ids": input_ids,  # [bsz, prompt_length + response_length]
+                    "attention_mask": attention_mask,  # [bsz, prompt_length + response_length]
+                    # position_ids: [bsz, 3, prompt_length + response_length] or [bsz, prompt_length + response_length]
+                    "position_ids": position_ids,
+                    "teacher_response": teacher_response,
+                    "teacher_input_ids": teacher_seq,
+                    "teacher_attention_mask": teacher_attention_mask,
+                    "teacher_position_ids": teacher_position_ids,
+                    **optional_outputs,
+                },
+                batch_size=len(inputs),
+            )
+        else:
+            batch = TensorDict(
+                {
+                    "prompts": prompt_ids,  # [bsz, prompt_length]
+                    "responses": response_ids,  # [bsz, response_length]
+                    "response_mask": response_mask,  # [bsz, response_length]
+                    "input_ids": input_ids,  # [bsz, prompt_length + response_length]
+                    "attention_mask": attention_mask,  # [bsz, prompt_length + response_length]
+                    # position_ids: [bsz, 3, prompt_length + response_length] or [bsz, prompt_length + response_length]
+                    "position_ids": position_ids,
+                    **optional_outputs,
+                },
+                batch_size=len(inputs),
+            )
 
         scores = [input.reward_score for input in inputs]
         if all(score is not None for score in scores):

@@ -102,9 +102,15 @@ def default_compute_score(
         from . import search_r1_like_qa_em
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+    elif data_source == "janv2_searchqa":
+        from verl.utils.reward_score.jan_v2_reward import compute_score
 
+        res = compute_score(solution_str, ground_truth, question=extra_info.get("question") if extra_info else None)
     else:
-        raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
+        from . import math_reward
+        # print warning message
+        res = math_reward.compute_score(solution_str, ground_truth)
+        # raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
     if isinstance(res, dict):
         return res

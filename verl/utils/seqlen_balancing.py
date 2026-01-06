@@ -261,6 +261,7 @@ def roundup_divisible(a, b):
 def rearrange_micro_batches(
     batch,
     max_token_len,
+     compute_teacher=False,
     dp_group=None,
     num_batches_divided_by=None,
     same_micro_num_in_dp=True,
@@ -291,7 +292,10 @@ def rearrange_micro_batches(
     else:
         max_seq_len = batch["attention_mask"].shape[-1]
         seq_len_effective: torch.Tensor = batch["attention_mask"].sum(dim=1)
-
+    if compute_teacher:
+        max_seq_len = batch["teacher_attention_mask"].shape[-1]
+        assert max_token_len >= max_seq_len, f"max_token_len must be greater than the sequence length. Got {max_token_len=} and {max_seq_len=}"
+        seq_len_effective: torch.Tensor = batch["teacher_attention_mask"].sum(dim=1)
     assert max_token_len >= max_seq_len, (
         f"max_token_len must be greater than the sequence length. Got {max_token_len=} and {max_seq_len=}"
     )

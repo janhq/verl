@@ -19,6 +19,8 @@ from uuid import uuid4
 
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils.profiler import simple_timer
+from verl.utils.model import compute_position_id_with_mask
+
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -36,6 +38,7 @@ class SingleTurnAgentLoop(AgentLoopBase):
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         messages = list(kwargs["raw_prompt"])
+        raw_teacher_response = kwargs.get("raw_teacher_response","")
         image_data = copy.deepcopy((kwargs.get("multi_modal_data") or {}).get("image", None))
 
         metrics = {}
@@ -67,6 +70,7 @@ class SingleTurnAgentLoop(AgentLoopBase):
                 request_id=request_id, prompt_ids=prompt_ids, sampling_params=sampling_params, image_data=image_data
             )
         response_mask = [1] * len(output.token_ids)
+        extra_fields = {}
 
         output = AgentLoopOutput(
             prompt_ids=prompt_ids,
@@ -81,5 +85,6 @@ class SingleTurnAgentLoop(AgentLoopBase):
             multi_modal_data={"image": image_data} if image_data is not None else {},
             num_turns=2,
             metrics=metrics,
+            extra_fields=extra_fields
         )
         return output

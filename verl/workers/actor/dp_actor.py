@@ -443,7 +443,7 @@ class DataParallelPPOActor(BasePPOActor):
         if os.environ.get("TRAIN_GAD") == "ON" and (os.environ.get("GAD_MODE") == "SFT" or os.environ.get("GAD_MODE") == "HYBRID"):
             data = self.deduplicate_by_uid(data)
             select_keys = [
-            "responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages",
+            "responses","response_mask", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages",
             "teacher_response", "teacher_input_ids", "teacher_attention_mask", "teacher_position_ids"
             ]
         else:
@@ -514,17 +514,17 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # all return: (bsz, response_length)
                     if os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "SFT":
-                        teacher_response = data["teacher_response"]
+                        teacher_response = model_inputs["teacher_response"]
                         teacher_response_length = teacher_response.size(1)
-                        teacher_attention_mask = data["teacher_attention_mask"]
+                        teacher_attention_mask = model_inputs["teacher_attention_mask"]
                         teacher_response_mask = teacher_attention_mask[:, -teacher_response_length:]
-                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=data, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
+                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=model_inputs, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
                     elif os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "HYBRID":
-                        teacher_response = data["teacher_response"]
+                        teacher_response = model_inputs["teacher_response"]
                         teacher_response_length = teacher_response.size(1)
-                        teacher_attention_mask = data["teacher_attention_mask"]
+                        teacher_attention_mask = model_inputs["teacher_attention_mask"]
                         teacher_response_mask = teacher_attention_mask[:, -teacher_response_length:]
-                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=data, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
+                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=model_inputs, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
                         entropy, log_prob = self._forward_micro_batch(
                             model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
                         )
@@ -538,7 +538,10 @@ class DataParallelPPOActor(BasePPOActor):
                         old_log_prob = model_inputs["old_log_probs"]
                     else:
                         if on_policy:
-                            old_log_prob = log_prob.detach()
+                            if os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "SFT":
+                                old_log_prob = teacher_log_prob.detach()
+                            else:
+                                old_log_prob = log_prob.detach()
                         else:
                             old_log_prob = model_inputs["old_log_probs"]
 

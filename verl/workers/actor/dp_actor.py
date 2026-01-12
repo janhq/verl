@@ -19,7 +19,7 @@ Single Process Actor
 
 import logging
 import os
-
+import numpy as np
 import torch
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -27,7 +27,8 @@ from torch.distributed.tensor import DTensor
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, get_policy_loss_fn, kl_penalty, compute_policy_loss_gad
+from verl.trainer.ppo.core_algos import  agg_loss, get_policy_loss_fn, kl_penalty, compute_policy_loss_gad, compute_sft_loss, compute_policy_loss
+
 from verl.utils.attention_utils import index_first_axis, pad_input, rearrange, unpad_input
 from verl.utils.device import get_device_id, get_device_name
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
@@ -92,14 +93,17 @@ class DataParallelPPOActor(BasePPOActor):
             self.scaler = None
 
     def _forward_micro_batch(
-        self, micro_batch, temperature, calculate_entropy=False
+        self, micro_batch, temperature, compute_teacher = False, calculate_entropy=False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
         """
-        response_length = micro_batch["responses"].size(-1)
+        if compute_teacher:
+            response_length = micro_batch["teacher_response"].size(-1)
+        else:
+            response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
             from verl.utils.model import extract_multi_modal_inputs
@@ -107,10 +111,16 @@ class DataParallelPPOActor(BasePPOActor):
             multi_modal_inputs = extract_multi_modal_inputs(micro_batch["multi_modal_inputs"])
 
         with torch.autocast(device_type=self.device_name, dtype=self.param_dtype):
-            input_ids = micro_batch["input_ids"]
-            batch_size, seqlen = input_ids.shape
-            attention_mask = micro_batch["attention_mask"]
-            position_ids = micro_batch["position_ids"]
+            if compute_teacher:
+                input_ids = micro_batch["teacher_input_ids"]
+                batch_size, seqlen = input_ids.shape
+                attention_mask = micro_batch["teacher_attention_mask"]
+                position_ids = micro_batch["teacher_position_ids"]
+            else:
+                input_ids = micro_batch["input_ids"]
+                batch_size, seqlen = input_ids.shape
+                attention_mask = micro_batch["attention_mask"]
+                position_ids = micro_batch["position_ids"]
             entropy = None
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
@@ -393,6 +403,37 @@ class DataParallelPPOActor(BasePPOActor):
                 entropys = restore_dynamic_batch(entropys, batch_idx_list)
 
         return log_probs, entropys
+    def deduplicate_by_uid(self, data_proto):
+        """
+        Deduplicate a DataProto object based on `non_tensor_batch['uid']`,
+        keeping only the first occurrence for each unique uid.
+
+        This function assumes that:
+        - The batch dimension is along dim 0.
+        - All tensor fields in `batch` and all entries in `non_tensor_batch`
+        are aligned along the same batch dimension.
+        """
+        # Ensure uid exists in non-tensor batch
+        assert "uid" in data_proto.non_tensor_batch, (
+            "`uid` is not found in data_proto.non_tensor_batch"
+        )
+
+        # uid array of shape [B], dtype=object
+        uids = data_proto.non_tensor_batch["uid"]
+        assert isinstance(uids, np.ndarray)
+
+        seen = set()
+        keep_idxs = []
+
+        # Keep the first occurrence of each uid
+        for i, uid in enumerate(uids):
+            if uid not in seen:
+                seen.add(uid)
+                keep_idxs.append(i)
+
+        # Use the existing DataProto indexing utility to slice
+        # both tensor and non-tensor fields consistently
+        return data_proto.select_idxs(keep_idxs)
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):
@@ -400,16 +441,22 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
-
-        select_keys = [
-            "responses",
-            "response_mask",
-            "input_ids",
-            "attention_mask",
-            "position_ids",
-            "old_log_probs",
-            "advantages",
-        ]
+        if os.environ.get("TRAIN_GAD") == "ON" and (os.environ.get("GAD_MODE") == "SFT" or os.environ.get("GAD_MODE") == "HYBRID"):
+            data = self.deduplicate_by_uid(data)
+            select_keys = [
+            "responses","response_mask", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages",
+            "teacher_response", "teacher_input_ids", "teacher_attention_mask", "teacher_position_ids"
+            ]
+        else:
+            select_keys = [
+                "responses",
+                "response_mask",
+                "input_ids",
+                "attention_mask",
+                "position_ids",
+                "old_log_probs",
+                "advantages",
+            ]
         if self.config.use_kl_loss:
             select_keys.append("ref_log_prob")
         # Include pre-computed IS weights if present in batch
@@ -467,16 +514,35 @@ class DataParallelPPOActor(BasePPOActor):
                         loss_scale_factor = 1 / self.gradient_accumulation
 
                     # all return: (bsz, response_length)
-                    entropy, log_prob = self._forward_micro_batch(
-                        model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
-                    )
+                    if os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "SFT":
+                        teacher_response = model_inputs["teacher_response"]
+                        teacher_response_length = teacher_response.size(1)
+                        teacher_attention_mask = model_inputs["teacher_attention_mask"]
+                        teacher_response_mask = teacher_attention_mask[:, -teacher_response_length:]
+                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=model_inputs, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
+                    elif os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "HYBRID":
+                        teacher_response = model_inputs["teacher_response"]
+                        teacher_response_length = teacher_response.size(1)
+                        teacher_attention_mask = model_inputs["teacher_attention_mask"]
+                        teacher_response_mask = teacher_attention_mask[:, -teacher_response_length:]
+                        teacher_entropy, teacher_log_prob = self._forward_micro_batch(micro_batch=model_inputs, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
+                        entropy, log_prob = self._forward_micro_batch(
+                            model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                        )
+                    else:
+                        entropy, log_prob = self._forward_micro_batch(
+                            model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                        )
 
                     # for fully_async_policy recipe
                     if hasattr(self.config, "use_rollout_log_probs") and self.config.use_rollout_log_probs:
                         old_log_prob = model_inputs["old_log_probs"]
                     else:
                         if on_policy:
-                            old_log_prob = log_prob.detach()
+                            if os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "SFT":
+                                old_log_prob = teacher_log_prob.detach()
+                            else:
+                                old_log_prob = log_prob.detach()
                         else:
                             old_log_prob = model_inputs["old_log_probs"]
 
@@ -487,21 +553,37 @@ class DataParallelPPOActor(BasePPOActor):
                     # Weights are computed centrally in trainer and added when algorithm.rollout_is=True
                     rollout_is_weights = model_inputs.get("rollout_is_weights", None)
 
+                    if os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "SFT":
+                        teacher_pg_loss = compute_sft_loss(
+                            log_prob=teacher_log_prob,
+                            response_mask=teacher_response_mask,
+                            loss_agg_mode=loss_agg_mode,
+                        )
+                        pg_loss = teacher_pg_loss
+                    elif os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "HYBRID":
+                        # TODO: add weighted SFT loss here for HYBRID MODE
+                        teacher_pg_loss = compute_sft_loss(
+                            log_prob=teacher_log_prob,
+                            response_mask=teacher_response_mask,
+                            loss_agg_mode=loss_agg_mode,
+                        )
+                        pg_loss = teacher_pg_loss
+                    else:
                     # gpg -> verl.trainer.ppo.core_algos.compute_policy_loss_gpg
                     # clip_cov -> verl.trainer.ppo.core_algos.compute_policy_loss_clip_cov
-                    policy_loss_fn = get_policy_loss_fn(loss_mode)
+                        policy_loss_fn = get_policy_loss_fn(loss_mode)
 
-                    # Compute policy loss (any function is expected to return 2 values)
-                    pg_loss, pg_metrics = policy_loss_fn(
-                        old_log_prob=old_log_prob,
-                        log_prob=log_prob,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        loss_agg_mode=loss_agg_mode,
-                        config=self.config,
-                        rollout_is_weights=rollout_is_weights,
-                    )
-                    micro_batch_metrics.update(pg_metrics)
+                        # Compute policy loss (any function is expected to return 2 values)
+                        pg_loss, pg_metrics = policy_loss_fn(
+                            old_log_prob=old_log_prob,
+                            log_prob=log_prob,
+                            advantages=advantages,
+                            response_mask=response_mask,
+                            loss_agg_mode=loss_agg_mode,
+                            config=self.config,
+                            rollout_is_weights=rollout_is_weights,
+                        )
+                        micro_batch_metrics.update(pg_metrics)
 
                     # Skip if using bypass_mode loss (metrics already computed in pg_metrics)
                     rollout_log_prob = model_inputs.get("rollout_log_probs", None)

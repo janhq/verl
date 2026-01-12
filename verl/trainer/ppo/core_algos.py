@@ -844,6 +844,15 @@ def agg_loss(
     return loss
 
 
+def compute_sft_loss(
+    log_prob,
+    response_mask,
+    loss_agg_mode: str = "token-mean",
+):
+    pg_loss = agg_loss(loss_mat=-log_prob, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+
+    return pg_loss
+
 @deprecated("verl.trainer.ppo.core_algos.compute_policy_loss_vanilla")
 def compute_policy_loss(
     old_log_prob,

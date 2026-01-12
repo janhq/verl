@@ -515,7 +515,11 @@ class AgentLoopWorkerBase:
             # because np.array() only keeps the keys for BatchFeature.
             multi_modal_inputs = dict(multi_modal_inputs.convert_to_tensors("pt"))
         if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
-            from verl.models.transformers.qwen2_vl import get_rope_index
+            if "Qwen3VLProcessor" in self.processor.__class__.__name__:
+                from verl.models.transformers.qwen3_vl import get_rope_index
+            else:
+                from verl.models.transformers.qwen2_vl import get_rope_index
+
 
             image_grid_thw = multi_modal_inputs.get("image_grid_thw")
             video_grid_thw = multi_modal_inputs.get("video_grid_thw")
@@ -605,7 +609,6 @@ class AgentLoopWorkerBase:
             teacher_response_length = teacher_response.size(1)
             teacher_delta_position_id = torch.arange(1, teacher_response_length + 1, device=position_ids.device)
             teacher_delta_position_id = teacher_delta_position_id.unsqueeze(0).expand(batch_size, -1)
-
             teacher_response_position_ids = prompt_position_ids[..., -1:] + teacher_delta_position_id
             teacher_position_ids = torch.cat([prompt_position_ids, teacher_response_position_ids], dim=-1)
             teacher_response_attention_mask = get_response_mask(response_id=teacher_response, eos_token=self.tokenizer.eos_token_id, dtype=attention_mask.dtype)

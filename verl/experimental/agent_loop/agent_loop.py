@@ -609,6 +609,7 @@ class AgentLoopWorkerBase:
             teacher_response_length = teacher_response.size(1)
             teacher_delta_position_id = torch.arange(1, teacher_response_length + 1, device=position_ids.device)
             teacher_delta_position_id = teacher_delta_position_id.unsqueeze(0).expand(batch_size, -1)
+
             teacher_response_position_ids = prompt_position_ids[..., -1:] + teacher_delta_position_id
             teacher_position_ids = torch.cat([prompt_position_ids, teacher_response_position_ids], dim=-1)
             teacher_response_attention_mask = get_response_mask(response_id=teacher_response, eos_token=self.tokenizer.eos_token_id, dtype=attention_mask.dtype)

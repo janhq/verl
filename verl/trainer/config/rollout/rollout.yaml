@@ -206,7 +206,7 @@ agent:
   num_workers: 8
 
   # default agent loop to use if `agent_name` not set in RL dataset
-  default_agent_loop: tool_agent
+  default_agent_loop: single_turn_agent
 
   # custom agent loop config path, which should contain list of configs to intialize AgentLoop instances.
   # https://hydra.cc/docs/advanced/instantiate_objects/overview/
@@ -325,3 +325,8 @@ prometheus:
   # Specify served_model_name to avoid displaying overly long model paths in Grafana
   served_model_name: ${oc.select:actor_rollout_ref.model.path,null}
 
+# type of quantization in vllm, currently support fp8 and torchao
+quantization: null
+
+# extra quantization information serialized in a config file, e.g. torchao_config.json
+quantization_config_file: null

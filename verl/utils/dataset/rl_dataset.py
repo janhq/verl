@@ -164,6 +164,7 @@ class RLHFDataset(Dataset):
         self.return_raw_chat = config.get("return_raw_chat", False)
         self.return_full_prompt = config.get("return_full_prompt", False)
         self.truncation = config.get("truncation", "error")
+        self.max_response_length = config.get("max_response_length", 16384)
         self.filter_overlong_prompts = config.get("filter_overlong_prompts", True)
         self.apply_chat_template_kwargs = config.get("apply_chat_template_kwargs", {})
 
@@ -247,9 +248,11 @@ class RLHFDataset(Dataset):
                         # insert system prompt at the beginning
                         messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                     return example
-                dataframe = dataframe.map(insert_user_prefix, num_proc=128)
-                dataframe = dataframe.map(add_system_prompt, num_proc=128)
-                
+                try:
+                    dataframe = dataframe.map(insert_user_prefix, num_proc=128)
+                    dataframe = dataframe.map(add_system_prompt, num_proc=128)
+                except:
+                    pass
                 print(dataframe[0])
                 # print("DATA SOURCE",dataframe['data_source'] )
                 # if dataframe['data_source'] != "janv2_searchqa":
@@ -402,6 +405,11 @@ class RLHFDataset(Dataset):
         """
         row_dict: dict = self.dataframe[item]
         messages = self._build_messages(row_dict)
+
+        teacher_response = None
+        if 'teacher_response' in row_dict:
+            teacher_response = row_dict.pop('teacher_response')
+            row_dict["raw_teacher_response"] = teacher_response
         model_inputs = {}
 
         if self.processor is not None:
@@ -475,6 +483,8 @@ class RLHFDataset(Dataset):
             model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
             input_ids = model_inputs.pop("input_ids")
             attention_mask = model_inputs.pop("attention_mask")
+        if teacher_response is not None:
+            teacher_response = self.tokenizer(teacher_response, return_tensors="pt", add_special_tokens=False)
 
         input_ids, attention_mask = verl_F.postprocess_data(
             input_ids=input_ids,
@@ -484,6 +494,16 @@ class RLHFDataset(Dataset):
             left_pad=True,
             truncation=self.truncation,
         )
+        if teacher_response is not None:
+                teacher_response_ids, _ = verl_F.postprocess_data(
+                    input_ids=teacher_response["input_ids"],
+                    attention_mask=teacher_response["attention_mask"],
+                    max_length=self.max_response_length,
+                    pad_token_id=self.tokenizer.eos_token_id, # it is a response, so use eos token to pad
+                    left_pad=False, # it is a response, so pad from right side
+                    truncation=self.truncation,
+                )
+                teacher_response_ids = teacher_response_ids.long()
 
         if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
             # qwen-vl mrope
@@ -524,6 +544,8 @@ class RLHFDataset(Dataset):
         row_dict["input_ids"] = input_ids[0]
         row_dict["attention_mask"] = attention_mask[0]
         row_dict["position_ids"] = position_ids[0]
+        if teacher_response is not None:
+                row_dict["teacher_response"] = teacher_response_ids[0]
 
         raw_prompt_ids = self.tokenizer.encode(raw_prompt, add_special_tokens=False)
         if len(raw_prompt_ids) > self.max_prompt_length:

@@ -29,13 +29,11 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
     from verl import DataProto
-    
     from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
     from verl.trainer.config.config import ModuleConfig, RewardManagerConfig
     from verl.workers.reward_manager.abstract import AbstractRewardManager, RawRewardFn
 else:
     try:
-
         from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
     except ImportError:
         RewardManagerBase = None  # type: ignore[assignment,misc]

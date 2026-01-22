@@ -15,19 +15,26 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def is_torch_npu_available() -> bool:
+def is_torch_npu_available(check_device=True) -> bool:
     """Check if Ascend NPU is available for PyTorch operations.
 
     Attempts to detect NPU availability by checking for the torch.npu module
     and its is_available() function.
 
+    Args:
+        check_device : only check torch_npu package or strictly check if NPU device is available
+
     Returns:
         bool: True if NPU is available, False otherwise.
     """
     try:
-        if hasattr(torch, "npu") and callable(getattr(torch.npu, "is_available", None)):
+        if not hasattr(torch, "npu"):
+            return False
+
+        if check_device:
             return torch.npu.is_available()
-        return False
+        else:
+            return True
     except ImportError:
         return False
 
@@ -46,7 +53,7 @@ def get_visible_devices_keyword() -> str:
         str: 'CUDA_VISIBLE_DEVICES' if CUDA is available,
             'ASCEND_RT_VISIBLE_DEVICES' otherwise.
     """
-    return "CUDA_VISIBLE_DEVICES" if is_cuda_available else "ASCEND_RT_VISIBLE_DEVICES"
+    return "CUDA_VISIBLE_DEVICES" if not is_torch_npu_available(check_device=False) else "ASCEND_RT_VISIBLE_DEVICES"
 
 
 def get_device_name() -> str:
@@ -127,25 +134,25 @@ def set_expandable_segments(enable: bool) -> None:
         torch.cuda.memory._set_allocator_settings(f"expandable_segments:{enable}")
 
 
-def auto_set_ascend_device_name(config) -> None:
-    """Automatically configure device name for Ascend NPU environments.
+def auto_set_device(config) -> None:
+    """Automatically configure device name for different accelerators.
 
-    If running on an Ascend NPU system, this function ensures the trainer
-    device configuration is set to 'npu'. Logs a warning if the config
-    was set to a different device type.
+    For example, on Ascend NPU, this function defaults the trainer device to "npu"
+    unless explicitly set to "cpu".
 
     Args:
         config: Configuration object with trainer.device attribute.
     """
-    if config and config.trainer and config.trainer.device:
+    if config and hasattr(config, "trainer") and hasattr(config.trainer, "device"):
         if is_torch_npu_available():
-            if config.trainer.device != "npu":
+            if config.trainer.device not in ["cpu", "npu"]:
                 logger.warning(
                     f"Detect setting config.trainer.device to {config.trainer.device} for Ascend NPU, maybe"
                     f"from default value in config file, automatically set to `npu` instead."
                 )
 
             config.trainer.device = "npu"
+        # Other cases: set device to "cuda" via config file, no need to change.
 
 
 def get_device_capability(device_id: int = 0) -> tuple[int | None, int | None]:

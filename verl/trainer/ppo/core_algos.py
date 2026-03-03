@@ -107,6 +107,7 @@ class AdvantageEstimator(str, Enum):
     GPG = "gpg"
     RLOO_VECTORIZED = "rloo_vectorized"
     GRPO_VECTORIZED = "grpo_vectorized"
+    MAXRL = "maxrl"
 
 
 ADV_ESTIMATOR_REGISTRY: dict[str, Any] = {}
@@ -210,6 +211,46 @@ def get_kl_controller(kl_ctrl):
     else:
         raise NotImplementedError
 
+@register_adv_est(AdvantageEstimator.MAXRL)
+def compute_maxrl_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    epsilon: float = 1e-6,
+    norm_adv_by_std_in_grpo: str = True,
+):
+    scores = token_level_rewards.sum(dim=-1)
+
+    id2score = defaultdict(list)
+    id2mean = {}
+    id2std = {}
+
+    with torch.no_grad():
+        bsz = scores.shape[0]
+
+        for i in range(bsz):
+            id2score[index[i]].append(scores[i])
+            
+        N = len(id2score[index[0]]) # number of responses per prompt
+            
+        for idx in id2score:
+            if len(id2score[idx]) == 1:
+                id2mean[idx] = torch.tensor(0.0)
+                id2std[idx] = torch.tensor(1.0)
+
+            elif len(id2score[idx]) > 1:
+                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+                id2std[idx] = torch.std(torch.tensor([id2score[idx]]))
+
+            else:
+                raise ValueError(f"no score in prompt index: {idx}")
+            
+        for i in range(bsz):
+            scores[i] = (scores[i] - id2mean[index[i]]) / (id2mean[index[i]] + epsilon)
+
+        scores = scores.unsqueeze(-1) * response_mask
+
+    return scores, scores
 
 @register_adv_est(AdvantageEstimator.GAE)  # or simply: @register_adv_est("gae")
 def compute_gae_advantage_return(

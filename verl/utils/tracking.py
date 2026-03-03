@@ -223,6 +223,33 @@ class ClearMLLogger:
     def finish(self):
         self._task.close()
 
+def _json_safe(o):
+    # PyTorch
+    try:
+        import torch
+        if isinstance(o, torch.Tensor):
+            o = o.detach()
+            if o.numel() == 1:
+                return o.item()
+            return o.cpu().tolist()
+    except Exception:
+        pass
+
+    # NumPy
+    try:
+        import numpy as np
+        if isinstance(o, (np.integer, np.floating)):
+            return o.item()
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+    except Exception:
+        pass
+
+    # Fallbacks
+    if isinstance(o, set):
+        return list(o)
+
+    raise TypeError(f"Not JSON serializable: {type(o).__name__}")
 
 class FileLogger:
     def __init__(self, project_name: str, experiment_name: str):
@@ -239,8 +266,23 @@ class FileLogger:
         self.fp = open(self.filepath, "w")
 
     def log(self, data, step):
-        data = {"step": step, "data": data}
-        self.fp.write(json.dumps(data) + "\n")
+        payload = {"step": step, "data": data}
+        try:
+            line = json.dumps(
+                payload,
+                default=_json_safe,
+                ensure_ascii=False,
+                allow_nan=False,   # optional: fail fast on NaN/Inf
+            )
+            self.fp.write(line + "\n")
+            self.fp.flush()  # optional (safer, slower)
+        except Exception as e:
+            print(f"Failed to write log data at step {step}: {e}")
+            # If you still want the payload printed, do it safely:
+            try:
+                print(json.dumps(payload, default=_json_safe)[:2000] + " ...")
+            except Exception:
+                print(f"(Also failed to stringify payload; type(data)={type(data)})")
 
     def finish(self):
         self.fp.close()

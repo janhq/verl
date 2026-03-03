@@ -13,7 +13,6 @@
 # limitations under the License.
 import logging
 import os
-from contextlib import nullcontext
 from functools import partial
 from itertools import chain
 from typing import Any, Optional
@@ -36,10 +35,8 @@ from verl.utils.device import (
 from verl.utils.distributed import initialize_global_process_group_ray
 from verl.utils.flops_counter import FlopsCounter
 from verl.utils.memory_utils import aggressive_empty_cache
-from verl.utils.metric.utils import Metric
 from verl.utils.profiler import DistProfiler, DistProfilerExtension, ProfilerConfig, log_gpu_memory_usage
 from verl.utils.py_functional import append_to_dict
-from verl.utils.tensordict_utils import maybe_fix_3d_position_ids
 from verl.utils.torch_functional import allgather_dict_into_dict
 from verl.workers.config import ActorConfig, HFModelConfig, RolloutConfig, TrainingWorkerConfig
 from verl.workers.rollout.base import BaseRollout, get_rollout_class
@@ -49,7 +46,7 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
-class TrainingWorker(Worker, DistProfilerExtension):
+class TrainingWorker(Worker):
     """
     TrainingWorker provides a Tinker-like API (https://thinkingmachines.ai/tinker/) as a RayWorkerGroup
     to a single controller. Currently, we only provide more coarse grained APIs,
@@ -74,15 +71,11 @@ class TrainingWorker(Worker, DistProfilerExtension):
         self.engine_config.use_remove_padding = self.model_config.use_remove_padding
 
         # TODO: add DistProfilerExtension
-        self.profiler_config = self.config.profiler_config
-        if self.profiler_config is not None:
-            self.profiler_tool_config = self.profiler_config.tool_config.get(self.profiler_config.tool, {})
-        else:
-            self.profiler_tool_config = None
-
-        DistProfilerExtension.__init__(
-            self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=self.profiler_tool_config)
-        )
+        # self.profiler_config = self.config.profiler_config
+        # tool_config = self.profiler_config.tool_config
+        # DistProfilerExtension.__init__(
+        #     self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=tool_config)
+        # )
 
         self.engine: BaseEngine = EngineRegistry.new(
             model_type=self.config.model_type,
@@ -184,7 +177,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
 
         """
 
-        maybe_fix_3d_position_ids(data)
         batch_size_per_dp = data.shape[0]
         disable_auto_offload = tu.pop(data, key="disable_auto_offload", default=False)
         mini_batch_size = tu.pop(data, key="mini_batch_size", default=None)
@@ -246,9 +238,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
                     for key, val in output.items():
                         # flattn dp and micro batch
                         if isinstance(val, list):
-                            output[key] = (
-                                Metric.chain(val) if isinstance(val[0], Metric) else list(chain.from_iterable(val))
-                            )
+                            output[key] = list(chain.from_iterable(val))
                     append_to_dict(metrics, output)
 
                 output = tu.get_tensordict(tensor_dict={}, non_tensor_dict={"metrics": metrics}).cpu()
@@ -259,7 +249,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
     def train_batch(self, data: TensorDict) -> TensorDict:
         assert self.loss_fn is not None, "loss function can't be None when calling train_batch"
-        assert not self.engine_config.forward_only, "Can't run `train_batch` when forward_only is in the engine config."
         # global_token_num should be a list of number of tokens of each seq in this batch
         global_token_num = tu.get(data, key="global_token_num")
         disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
@@ -303,7 +292,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
             ).cpu()
         else:
             final_output = None
-
         return final_output
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
@@ -312,7 +300,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
         global_token_num = tu.get(data, key="global_token_num")
         compute_loss = tu.get(data, key="compute_loss", default=True)
         disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
-        no_lora_adapter = tu.pop(data, key="no_lora_adapter", default=False)
 
         default_keys = dict(
             use_remove_padding=self.model_config.use_remove_padding,
@@ -333,9 +320,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             self.engine.eval_mode(disable_auto_offload=disable_auto_offload),
             Timer(name="eval_batch", logger=None) as timer,
         ):
-            adapter_ctx = self.engine.disable_adapter() if no_lora_adapter else nullcontext()
-            with adapter_ctx:
-                output = self.engine.infer_batch(data, loss_function=loss_function)
+            output = self.engine.infer_batch(data, loss_function=loss_function)
         delta_time = timer.last
 
         if self.engine.is_mp_src_rank_with_outputs():
@@ -344,7 +329,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
             ).cpu()
         else:
             final_output = None
-
         return final_output
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
@@ -395,6 +379,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         DistProfilerExtension.__init__(
             self, DistProfiler(rank=self.rank, config=profiler_config, tool_config=tool_config)
         )
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def set_loss_fn(self, loss_fn):
+        self.actor.set_loss_fn(loss_fn=loss_fn)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def to(self, device, model=True, optimizer=True, grad=True):
+        """Manual control of load/offload"""
+        self.actor.to(device=device, model=model, optimizer=optimizer, grad=grad)
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def set_loss_fn(self, loss_fn):
@@ -478,7 +471,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 assert self.config.actor.ppo_max_token_len_per_gpu is not None
             else:
                 assert self.config.rollout.log_prob_micro_batch_size_per_gpu is not None
-                assert self.config.actor.ppo_micro_batch_size_per_gpu is not None
+                assert self.config.rollout.ppo_micro_batch_size_per_gpu is not None
 
             self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = TrainingWorker(config=actor_training_config)
@@ -572,9 +565,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         set_expandable_segments(False)
 
         # 1. get per tensor generator from engine, this will load model to gpu
-        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
-            layered_summon=self.layered_summon, base_sync_done=self.base_sync_done
-        )
+        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param()
 
         # 2. resume weights and update weights
         if self.config.rollout.free_cache_engine:

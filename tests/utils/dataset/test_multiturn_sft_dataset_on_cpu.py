@@ -17,7 +17,6 @@ Test the MultiTurnSFTDataset implementation
 
 import os
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -33,15 +32,13 @@ from verl.utils.dataset.dataset_utils import DatasetPadMode, SFTTensorCollator
 from verl.utils.dataset.multiturn_sft_dataset import MultiTurnSFTDataset
 from verl.utils.model import extract_multi_modal_inputs
 
-custom_model_prefix = Path("~/models").expanduser().resolve()
-
 
 @pytest.mark.parametrize(
     "model_path",
     [
-        f"{custom_model_prefix}/Qwen/Qwen2.5-0.5B",
-        f"{custom_model_prefix}/Qwen/Qwen2.5-Coder-7B-Instruct",
-        f"{custom_model_prefix}/Qwen/Qwen3-30B-A3B-Instruct-2507",
+        "Qwen/Qwen2.5-0.5B",
+        "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507",
         # "Qwen/Qwen3-30B-A3B-Thinking-2507" # Thinking series models add <think></think> tags to last turn.
     ],
 )
@@ -333,7 +330,7 @@ def vlm_data_file():
 
 def test_multiturn_sft_vlm_dataset_on_cpu(vlm_data_file):
     df = pd.read_parquet(vlm_data_file)
-    model_path = f"{custom_model_prefix}/Qwen/Qwen3-VL-2B-Instruct"
+    model_path = "Qwen/Qwen3-VL-2B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     processor = AutoProcessor.from_pretrained(model_path)
     config = {"max_length": 512, "pad_mode": "no_padding", "truncation": "error", "messages_key": "messages"}
@@ -389,7 +386,7 @@ def test_multiturn_sft_vlm_dataset_on_cpu(vlm_data_file):
 
 def test_multiturn_sft_vlm_dataloader_on_cpu(vlm_data_file):
     df = pd.read_parquet(vlm_data_file)
-    model_path = f"{custom_model_prefix}/Qwen/Qwen3-VL-2B-Instruct"
+    model_path = "Qwen/Qwen3-VL-2B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     processor = AutoProcessor.from_pretrained(model_path)
     config = {"max_length": 512, "pad_mode": "no_padding", "truncation": "error", "messages_key": "messages"}

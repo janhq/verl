@@ -21,8 +21,4 @@ VL_TYPE2INDEX = {
         "IMAGE_INPUT_INDEX": 151655,
         "VIDEO_INPUT_INDEX": 151656,
     },
-    "qwen3_vl_moe": {
-        "IMAGE_INPUT_INDEX": 151655,
-        "VIDEO_INPUT_INDEX": 151656,
-    },
 }

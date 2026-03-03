@@ -23,7 +23,6 @@ from verl.single_controller.ray.base import (
     RayWorkerGroup,
     create_colocated_worker_cls_fused,
 )
-from verl.utils.device import get_device_name
 
 
 @ray.remote
@@ -60,8 +59,8 @@ def test_colocated_workers_fused():
     critic_cls = RayClassWithInitArgs(cls=Critic, config={"b": 10})
     resource_pool = RayResourcePool(process_on_nodes=[2])
 
-    actor_wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=actor_cls, device_name=get_device_name())
-    critic_wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=critic_cls, device_name=get_device_name())
+    actor_wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=actor_cls)
+    critic_wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=critic_cls)
 
     expected_actor_output = actor_wg.add(data)
     expected_critic_output = critic_wg.sub(data)
@@ -69,9 +68,7 @@ def test_colocated_workers_fused():
     # create colocated workers
     cls_dict = {"actor": actor_cls, "critic": critic_cls}
     ray_cls_with_init = create_colocated_worker_cls_fused(cls_dict)
-    wg_dict = RayWorkerGroup(
-        resource_pool=resource_pool, ray_cls_with_init=ray_cls_with_init, device_name=get_device_name()
-    )
+    wg_dict = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=ray_cls_with_init)
     spawn_wg = wg_dict.spawn(prefix_set=cls_dict.keys())
 
     colocated_actor_wg = spawn_wg["actor"]

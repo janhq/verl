@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
@@ -19,7 +20,6 @@ from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
 from verl.utils.profiler import ProfilerConfig
-from verl.workers.config.model import MtpConfig
 
 __all__ = [
     "SamplingConfig",
@@ -151,8 +151,6 @@ class RolloutConfig(BaseConfig):
     tensor_model_parallel_size: int = 2
     pipeline_model_parallel_size: int = 1
     max_num_batched_tokens: int = 8192
-    logprobs_mode: Optional[str] = "processed_logprobs"
-    scheduling_policy: Optional[str] = "fcfs"
 
     # TODO: enable train_kwargs
     # train_sampling_config: SamplingConfig = field(default_factory=SamplingConfig)
@@ -222,8 +220,6 @@ class RolloutConfig(BaseConfig):
 
     enable_sleep_mode: bool = True
 
-    mtp: MtpConfig = field(default_factory=MtpConfig)
-
     def __post_init__(self):
         """Validate the rollout config"""
         # Deprecation warning for mode field - only async mode is supported
@@ -246,7 +242,7 @@ class RolloutConfig(BaseConfig):
             )
 
         if self.pipeline_model_parallel_size > 1:
-            if self.name == "vllm" or self.name == "sglang" or self.name == "trtllm":
+            if self.name == "vllm" or self.name == "sglang":
                 raise NotImplementedError(
                     f"Current rollout {self.name=} not implemented pipeline_model_parallel_size > 1 yet."
                 )

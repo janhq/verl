@@ -16,7 +16,6 @@ from .base import (
     RayClassWithInitArgs,
     RayResourcePool,
     RayWorkerGroup,
-    SubRayResourcePool,
     create_colocated_worker_cls,
     create_colocated_worker_cls_fused,
 )
@@ -24,7 +23,6 @@ from .base import (
 __all__ = [
     "RayClassWithInitArgs",
     "RayResourcePool",
-    "SubRayResourcePool",
     "RayWorkerGroup",
     "create_colocated_worker_cls",
     "create_colocated_worker_cls_fused",

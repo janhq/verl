@@ -13,7 +13,8 @@ on:
       - "**/*.py"
       # Other entrypoints
       - "!verl/trainer/fsdp_sft_trainer.py"
-
+      # Recipes
+      - "!recipe/**"
       # Megatron
       - "!verl/workers/**/megatron_*.py"
 
@@ -32,7 +33,8 @@ on:
       - "!verl/trainer/fsdp_sft_trainer.py"
       # Docs
       - "!docs/**"
-
+      # Recipes
+      - "!recipe/**"
       # Megatron
       - "!verl/workers/**/megatron_*.py"
       # Entrypoints

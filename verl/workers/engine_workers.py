@@ -11,11 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import functools
 import logging
 import os
+<<<<<<< HEAD
 from functools import partial
 from itertools import chain
 from typing import Any, Optional
+=======
+from contextlib import nullcontext
+from functools import partial
+from itertools import chain
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
 import torch
 from codetiming import Timer
@@ -23,10 +30,19 @@ from omegaconf import DictConfig, open_dict
 from tensordict import NonTensorData, TensorDict
 from torch.distributed.device_mesh import init_device_mesh
 
+<<<<<<< HEAD
+=======
+try:
+    from verl.workers.engine.mindspeed.transformer_impl import repatch
+except ImportError:
+    repatch = None
+from verl.checkpoint_engine import CheckpointEngineRegistry
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 from verl.single_controller.base import Worker
 from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
 from verl.utils import tensordict_utils as tu
 from verl.utils.config import omega_conf_to_dataclass
+<<<<<<< HEAD
 from verl.utils.device import (
     get_device_name,
     get_torch_device,
@@ -35,8 +51,16 @@ from verl.utils.device import (
 from verl.utils.distributed import initialize_global_process_group_ray
 from verl.utils.flops_counter import FlopsCounter
 from verl.utils.memory_utils import aggressive_empty_cache
+=======
+from verl.utils.device import get_device_name, set_expandable_segments
+from verl.utils.distributed import initialize_global_process_group_ray
+from verl.utils.flops_counter import FlopsCounter
+from verl.utils.memory_utils import aggressive_empty_cache
+from verl.utils.metric.utils import Metric
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 from verl.utils.profiler import DistProfiler, DistProfilerExtension, ProfilerConfig, log_gpu_memory_usage
 from verl.utils.py_functional import append_to_dict
+from verl.utils.tensordict_utils import maybe_fix_3d_position_ids
 from verl.utils.torch_functional import allgather_dict_into_dict
 from verl.workers.config import ActorConfig, HFModelConfig, RolloutConfig, TrainingWorkerConfig
 from verl.workers.rollout.base import BaseRollout, get_rollout_class
@@ -46,7 +70,22 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
-class TrainingWorker(Worker):
+def _with_routing_replay_flag(enabled: bool):
+    """Decorator to set 'enable_routing_replay' flag on the data TensorDict."""
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, data: TensorDict, *args, **kwargs):
+            if self.enable_routing_replay:
+                tu.assign_non_tensor_data(data, "enable_routing_replay", enabled)
+            return func(self, data, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+class TrainingWorker(Worker, DistProfilerExtension):
     """
     TrainingWorker provides a Tinker-like API (https://thinkingmachines.ai/tinker/) as a RayWorkerGroup
     to a single controller. Currently, we only provide more coarse grained APIs,
@@ -67,15 +106,42 @@ class TrainingWorker(Worker):
         self.checkpoint_config = self.config.checkpoint_config
         self.device_name = get_device_name()
 
+<<<<<<< HEAD
         # we use the one defined in model
         self.engine_config.use_remove_padding = self.model_config.use_remove_padding
+=======
+        if self.engine_config is None:
+            assert self.optimizer_config is None
+            if self.config.auto_select_engine_optim_fn is None:
+                raise ValueError(
+                    "engine_config is not provided and auto_select_engine_optim_fn is not set. "
+                    "Cannot determine engine backend."
+                )
+            # Support automatically select engine backend given model config
+            self.engine_config, self.optimizer_config = self.config.auto_select_engine_optim_fn(
+                self.model_config, self.device_name
+            )
+
+        # we use the one defined in model
+        # TODO: this is not elegant and should refactor later
+        self.engine_config.use_remove_padding = self.model_config.use_remove_padding
+        self.engine_config.use_fused_kernels = self.model_config.use_fused_kernels
+
+        if repatch is not None:
+            # NPU MindSpeed patch, will be refactored with MindSpeedEngine.
+            repatch(self.engine_config.get("override_transformer_config", {}))
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
         # TODO: add DistProfilerExtension
-        # self.profiler_config = self.config.profiler_config
-        # tool_config = self.profiler_config.tool_config
-        # DistProfilerExtension.__init__(
-        #     self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=tool_config)
-        # )
+        self.profiler_config = self.config.profiler_config
+        if self.profiler_config is not None:
+            self.profiler_tool_config = self.profiler_config.tool_config.get(self.profiler_config.tool, {})
+        else:
+            self.profiler_tool_config = None
+
+        DistProfilerExtension.__init__(
+            self, DistProfiler(rank=self.rank, config=self.profiler_config, tool_config=self.profiler_tool_config)
+        )
 
         self.engine: BaseEngine = EngineRegistry.new(
             model_type=self.config.model_type,
@@ -119,7 +185,7 @@ class TrainingWorker(Worker):
         """
         self.engine.initialize()
 
-    def _postprocess_output(self, output, *, global_token_num, delta_time, forward_only):
+    def _postprocess_output(self, output, *, global_token_num, delta_time, forward_only, images_seqlens):
         """
 
         Args:
@@ -138,25 +204,36 @@ class TrainingWorker(Worker):
         # Here each metric in metrics can be a list (micro-batch metrics) or a singleton
         # we should always sum the loss of each micro-batch as we scale by global_bsz/global_token
         loss = torch.sum(torch.tensor(output.pop("loss"), device=self.device_name))
-        torch.distributed.all_reduce(
-            loss, op=torch.distributed.ReduceOp.AVG, group=self.engine.get_data_parallel_group()
-        )
+        dp_group = self.engine.get_data_parallel_group()
+        if dp_group is not None:
+            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=dp_group)
         loss = loss.item()
 
         # For grad_norm, we do not perform all reduce because it is already been done when clipping grad
         grad_norm = metrics.pop("grad_norm", None)
         lr = metrics.pop("lr", None)
 
-        # For other metrics, we perform all gather in dp group
-        final_metrics = allgather_dict_into_dict(data=metrics, group=self.engine.get_data_parallel_group())
+        # For other metrics, we perform all gather in dp group (only if DP > 1)
+        if dp_group is not None:
+            final_metrics = allgather_dict_into_dict(data=metrics, group=dp_group)
+        else:
+            final_metrics = metrics
         final_metrics["loss"] = loss
         if grad_norm is not None:
             final_metrics["grad_norm"] = grad_norm
         if lr is not None:
             final_metrics["lr"] = lr
+
+        # TODO: confirm the mtp loss IS same across dp
+        for k, v in final_metrics.items():
+            if k.startswith("mtp_losses"):
+                flatten_v = [sublist[0] for sublist in v]  # sublist should be single element
+                final_metrics[k] = sum(flatten_v) / len(flatten_v)
         # compute mfu
         if global_token_num is not None:
-            estimated_flops, promised_flops = self.flops_counter.estimate_flops(global_token_num, delta_time)
+            estimated_flops, promised_flops = self.flops_counter.estimate_flops(
+                global_token_num, delta_time, images_seqlens=images_seqlens
+            )
             final_metrics["mfu"] = estimated_flops / promised_flops / torch.distributed.get_world_size()
             if forward_only:
                 final_metrics["mfu"] /= 3.0
@@ -176,7 +253,11 @@ class TrainingWorker(Worker):
         Returns:
 
         """
+<<<<<<< HEAD
 
+=======
+        maybe_fix_3d_position_ids(data)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
         batch_size_per_dp = data.shape[0]
         disable_auto_offload = tu.pop(data, key="disable_auto_offload", default=False)
         mini_batch_size = tu.pop(data, key="mini_batch_size", default=None)
@@ -238,7 +319,15 @@ class TrainingWorker(Worker):
                     for key, val in output.items():
                         # flattn dp and micro batch
                         if isinstance(val, list):
+<<<<<<< HEAD
                             output[key] = list(chain.from_iterable(val))
+=======
+                            output[key] = (
+                                Metric.aggregate_dp(val)
+                                if isinstance(val[0], Metric)
+                                else list(chain.from_iterable(val))
+                            )
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
                     append_to_dict(metrics, output)
 
                 output = tu.get_tensordict(tensor_dict={}, non_tensor_dict={"metrics": metrics}).cpu()
@@ -249,9 +338,14 @@ class TrainingWorker(Worker):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
     def train_batch(self, data: TensorDict) -> TensorDict:
         assert self.loss_fn is not None, "loss function can't be None when calling train_batch"
+        assert not self.engine_config.forward_only, "Can't run `train_batch` when forward_only is in the engine config."
         # global_token_num should be a list of number of tokens of each seq in this batch
         global_token_num = tu.get(data, key="global_token_num")
         disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
+<<<<<<< HEAD
+=======
+        images_seqlens = tu.get(data, key="images_seqlens", default=None)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
         # inject engineering parameters if not specified
         default_keys = dict(
@@ -288,10 +382,19 @@ class TrainingWorker(Worker):
             if lr is not None:
                 output["metrics"]["lr"] = lr
             final_output = self._postprocess_output(
+<<<<<<< HEAD
                 output, global_token_num=global_token_num, delta_time=delta_time, forward_only=False
+=======
+                output,
+                global_token_num=global_token_num,
+                delta_time=delta_time,
+                forward_only=False,
+                images_seqlens=images_seqlens,
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
             ).cpu()
         else:
             final_output = None
+
         return final_output
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="train"), blocking=False)
@@ -300,6 +403,11 @@ class TrainingWorker(Worker):
         global_token_num = tu.get(data, key="global_token_num")
         compute_loss = tu.get(data, key="compute_loss", default=True)
         disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
+<<<<<<< HEAD
+=======
+        no_lora_adapter = tu.pop(data, key="no_lora_adapter", default=False)
+        images_seqlens = tu.get(data, key="images_seqlens", default=None)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
         default_keys = dict(
             use_remove_padding=self.model_config.use_remove_padding,
@@ -320,15 +428,30 @@ class TrainingWorker(Worker):
             self.engine.eval_mode(disable_auto_offload=disable_auto_offload),
             Timer(name="eval_batch", logger=None) as timer,
         ):
+<<<<<<< HEAD
             output = self.engine.infer_batch(data, loss_function=loss_function)
+=======
+            adapter_ctx = self.engine.disable_adapter() if no_lora_adapter else nullcontext()
+            with adapter_ctx:
+                output = self.engine.infer_batch(data, loss_function=loss_function)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
         delta_time = timer.last
 
         if self.engine.is_mp_src_rank_with_outputs():
             final_output = self._postprocess_output(
+<<<<<<< HEAD
                 output, global_token_num=global_token_num, delta_time=delta_time, forward_only=True
+=======
+                output,
+                global_token_num=global_token_num,
+                delta_time=delta_time,
+                forward_only=True,
+                images_seqlens=images_seqlens,
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
             ).cpu()
         else:
             final_output = None
+
         return final_output
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
@@ -376,6 +499,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         else:
             tool_config = None
 
+<<<<<<< HEAD
+=======
+        self.enable_routing_replay = (
+            self.config.actor.strategy == "megatron" and self.config.actor.megatron.router_replay.mode != "disabled"
+        )
+
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
         DistProfilerExtension.__init__(
             self, DistProfiler(rank=self.rank, config=profiler_config, tool_config=tool_config)
         )
@@ -388,6 +518,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def to(self, device, model=True, optimizer=True, grad=True):
         """Manual control of load/offload"""
         self.actor.to(device=device, model=model, optimizer=optimizer, grad=grad)
+<<<<<<< HEAD
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def set_loss_fn(self, loss_fn):
@@ -397,6 +528,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def to(self, device, model=True, optimizer=True, grad=True):
         """Manual control of load/offload"""
         self.actor.to(device=device, model=model, optimizer=optimizer, grad=grad)
+=======
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
@@ -441,7 +574,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if "actor" in self.role:
             actor_config: ActorConfig = omega_conf_to_dataclass(self.config.actor)
             actor_config.model_config = model_config
-
             actor_training_config = TrainingWorkerConfig(
                 model_type="language_model",
                 model_config=actor_config.model_config,
@@ -450,6 +582,17 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 checkpoint_config=actor_config.checkpoint,
             )
 
+<<<<<<< HEAD
+            actor_training_config = TrainingWorkerConfig(
+                model_type="language_model",
+                model_config=actor_config.model_config,
+                engine_config=actor_config.engine,
+                optimizer_config=actor_config.optim,
+                checkpoint_config=actor_config.checkpoint,
+            )
+
+=======
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
             assert self.config.actor.use_dynamic_bsz == self.config.rollout.log_prob_use_dynamic_bsz
 
             # assign engine configs
@@ -471,7 +614,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 assert self.config.actor.ppo_max_token_len_per_gpu is not None
             else:
                 assert self.config.rollout.log_prob_micro_batch_size_per_gpu is not None
+<<<<<<< HEAD
                 assert self.config.rollout.ppo_micro_batch_size_per_gpu is not None
+=======
+                assert self.config.actor.ppo_micro_batch_size_per_gpu is not None
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
             self.loss_fn = partial(ppo_loss, config=actor_config)
             self.actor = TrainingWorker(config=actor_training_config)
@@ -480,11 +627,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             self.set_dispatch_collect(mesh_name="actor", **self.actor.get_dispatch_collect())
 
         # 3. build rollout engine
-        # - vllm: vLLMAsyncRollout
-        # - sglang: ServerAdapter
         if "rollout" in self.role:
             rollout_config: RolloutConfig = omega_conf_to_dataclass(self.config.rollout)
 
+            # TODO: move rollout_device_mesh into ServerAdapter
             # 3.1 build rollout device mesh (sglang need only)
             infer_tp = rollout_config.tensor_model_parallel_size * rollout_config.data_parallel_size
             infer_pp = rollout_config.pipeline_model_parallel_size
@@ -497,14 +643,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 get_device_name(), mesh_shape=(dp, infer_tp, infer_pp), mesh_dim_names=["dp", "infer_tp", "infer_pp"]
             )
 
-            # 3.2 init trainer and rollout random states
-            self.torch_random_states = get_torch_device().get_rng_state()
-            gen_dp_rank = rollout_device_mesh["dp"].get_local_rank()
-            get_torch_device().manual_seed(gen_dp_rank + 1000)  # make sure all tp ranks have the same random states
-            self.gen_random_states = get_torch_device().get_rng_state()
-            get_torch_device().set_rng_state(self.torch_random_states)
-
-            # 3.3 initialize rollout engine
+            # 3.2 initialize rollout engine
             rollout_cls: type[BaseRollout] = get_rollout_class(rollout_config.name, rollout_config.mode)
             self.rollout = rollout_cls(
                 config=rollout_config, model_config=model_config, device_mesh=rollout_device_mesh
@@ -513,21 +652,50 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # used for LoRA
             self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
             self.layered_summon = self.config.rollout.get("layered_summon", False)
+            self.peft_merge: bool = model_config.lora.get("merge", False)
+
+        # 4. build checkpoint engine
+        if "actor" in self.role:
+            checkpoint_engine_config = omega_conf_to_dataclass(self.config.rollout.checkpoint_engine)
+            backend = checkpoint_engine_config.backend
+            bucket_size = checkpoint_engine_config.update_weights_bucket_megabytes << 20
+            engine_kwargs = checkpoint_engine_config.engine_kwargs.get(backend, {})
+            self.checkpoint_engine = CheckpointEngineRegistry.new(
+                backend, is_master=(torch.distributed.get_rank() == 0), bucket_size=bucket_size, **engine_kwargs
+            )
+
+        # Free cached GPU memory so colocated vLLM processes can see it via cudaMemGetInfo
+        aggressive_empty_cache(force_sync=True)
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="ref"))
     @DistProfiler.annotate(color="olive", role="ref_compute_log_prob")
+<<<<<<< HEAD
+=======
+    @_with_routing_replay_flag(enabled=False)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
     def compute_ref_log_prob(self, data: TensorDict) -> TensorDict:
         output = self.ref.infer_batch(data=data)
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="blue", role="actor_compute_log_prob")
+<<<<<<< HEAD
     def compute_log_prob(self, data: TensorDict) -> TensorDict:
         output = self.actor.infer_batch(data)
+=======
+    @_with_routing_replay_flag(enabled=True)
+    def compute_log_prob(self, data: TensorDict) -> TensorDict:
+        output = self.actor.infer_batch(data)
+
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="red", role="actor_update")
+<<<<<<< HEAD
+=======
+    @_with_routing_replay_flag(enabled=True)
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
     def update_actor(self, data: TensorDict) -> TensorDict:
         output = self.actor.train_mini_batch(data=data)
         return output.cpu() if output is not None else None
@@ -542,36 +710,54 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         assert "actor" in self.role, "save_checkpoint only support actor role"
         self.actor.save_checkpoint(local_path, hdfs_path, global_step, max_ckpt_to_keep)
 
-    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD)
-    async def sleep(self):
-        """Context switch from rollout mode to trainer mode."""
-        if self.config.rollout.free_cache_engine:
-            log_gpu_memory_usage("Before rollout offload", logger=logger)
-            await self.rollout.release()
-            log_gpu_memory_usage("After rollout offload", logger=logger)
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL, blocking=False)
+    async def update_weights(self):
+        """Update weights from trainer to rollout.
 
-        # add empty cache after each compute
-        aggressive_empty_cache(force_sync=True)
-        set_expandable_segments(True)
+        1. For sync training with colocated trainer and rollout, update rollout directly from model engine.
+           - before update_weights: rollout should be in sleep mode.
+           - after update_weights: rollout should be in wake_up mode.
+        2. For async training with disaggregated trainer and rollout, send_weights only by checkpoint engine.
+        """
 
-        # restore random states
-        self.gen_random_states = get_torch_device().get_rng_state()
-        get_torch_device().set_rng_state(self.torch_random_states)
+        # 0. send_weights only for async training with disaggregated trainer and rollout
+        if self.config.rollout.checkpoint_engine.backend != "naive":
+            per_tensor_param, _ = self.actor.engine.get_per_tensor_param()
+            await self.checkpoint_engine.send_weights(per_tensor_param)
+            return
 
-    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD)
-    async def wake_up(self):
-        """Context switch trainer mode to rollout mode."""
-        aggressive_empty_cache(force_sync=True)
         set_expandable_segments(False)
+        log_gpu_memory_usage("Before resume weights", logger=logger)
 
-        # 1. get per tensor generator from engine, this will load model to gpu
-        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param()
-
-        # 2. resume weights and update weights
+        # 1. resume weights and update weights
         if self.config.rollout.free_cache_engine:
             await self.rollout.resume(tags=["weights"])
         log_gpu_memory_usage("After resume weights", logger=logger)
-        await self.rollout.update_weights(per_tensor_param, peft_config=peft_config, base_sync_done=self.base_sync_done)
+
+        # 2. get per tensor generator from engine, this will load model to gpu
+        per_tensor_param, peft_config = self.actor.engine.get_per_tensor_param(
+            layered_summon=self.layered_summon, base_sync_done=True
+        )
+
+        await self.rollout.update_weights(per_tensor_param, peft_config=peft_config, base_sync_done=True)
+
+        do_lora_base_sync = False
+        if not self.peft_merge and peft_config is not None:
+            # set sleep level for LoRA adapter weights only sync
+            # TODO: make this configurable so that users with small
+            # main memory can trade sync time to avoid OOM
+            self.rollout.sleep_level = 1
+
+            do_lora_base_sync = (not self.base_sync_done) or (
+                self.rollout.sleep_level != 1 and self.config.rollout.free_cache_engine
+            )
+
+        if do_lora_base_sync:
+            per_tensor_base_params, _ = self.actor.engine.get_per_tensor_param(
+                layered_summon=self.layered_summon, base_sync_done=False
+            )
+            await self.rollout.update_weights(per_tensor_base_params, peft_config=peft_config, base_sync_done=False)
+
         log_gpu_memory_usage("After update_weights", logger=logger)
 
         # 3. offload model to cpu
@@ -584,30 +770,16 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         log_gpu_memory_usage("After resume kv_cache", logger=logger)
 
         self.base_sync_done = True
-        # important: need to manually set the random states of each tp to be identical.
-        self.torch_random_states = get_torch_device().get_rng_state()
-        get_torch_device().set_rng_state(self.gen_random_states)
+        set_expandable_segments(True)
 
-    # ============================ vLLM related ============================
+    @register(dispatch_mode=Dispatch.DP_COMPUTE, blocking=False)
+    def execute_checkpoint_engine(self, method: str, *args, **kwargs):
+        """Execute checkpoint engine method.
 
-    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD)
-    def get_zeromq_address(self):
-        return self.rollout.get_zeromq_address()
+        Args:
+            method (str): Checkpoint engine method name.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
 
-    # ============================ SGLang related ============================
-
-    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
-    async def chat_completion(self, json_request):
-        ret = await self.rollout.chat_completion(json_request)
-        return ret
-
-    @register(dispatch_mode=Dispatch.DIRECT_ROLLOUT_METHOD, blocking=False)
-    async def generate(
-        self,
-        prompt_ids: list[int],
-        sampling_params: dict[str, Any],
-        request_id: str,
-        image_data: Optional[list[Any]] = None,
-    ) -> list[int]:
-        ret = await self.rollout.generate(prompt_ids, sampling_params, request_id, image_data=image_data)
-        return ret
+        """
+        return getattr(self.checkpoint_engine, method)(*args, **kwargs)

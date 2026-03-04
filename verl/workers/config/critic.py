@@ -22,11 +22,11 @@ from verl.base_config import BaseConfig
 from verl.trainer.config import BaseModelConfig, CheckpointConfig
 from verl.utils.profiler import ProfilerConfig
 
-from .engine import FSDPEngineConfig, McoreEngineConfig
+from .engine import FSDPEngineConfig, McoreEngineConfig, TorchtitanEngineConfig
 from .model import HFModelConfig
 from .optimizer import OptimizerConfig
 
-__all__ = ["CriticConfig", "FSDPCriticConfig", "McoreCriticConfig", "FSDPCriticModelCfg"]
+__all__ = ["CriticConfig", "FSDPCriticConfig", "McoreCriticConfig", "TorchTitanCriticConfig", "FSDPCriticModelCfg"]
 
 
 @dataclass
@@ -225,6 +225,26 @@ class FSDPCriticConfig(CriticConfig):
 
 
 @dataclass
+class TorchTitanCriticConfig(CriticConfig):
+    """Configuration for TorchTitan-based critic model training.
+
+    The inheritance from CriticConfig provides all base critic configuration plus TorchTitan-specific settings.
+
+    Args:
+        strategy (str): Training strategy set to 'torchtitan' for TorchTitan parallelism.
+        torchtitan (TorchtitanEngineConfig): Configuration for TorchTitan engine settings.
+    """
+
+    strategy: str = "torchtitan"
+    torchtitan: TorchtitanEngineConfig = field(default_factory=TorchtitanEngineConfig)
+
+    def __post_init__(self):
+        """Validate TorchTitan critic configuration parameters."""
+        super().__post_init__()
+        self.engine = self.torchtitan
+
+
+@dataclass
 class FSDPCriticModelCfg(BaseModelConfig):
     """FSDP-enabled critic model configuration.
     Inherits base critic settings and adds distributed-memory and LoRA options.
@@ -248,3 +268,5 @@ class FSDPCriticModelCfg(BaseModelConfig):
     lora_rank: int = 0
     lora_alpha: int = 16
     target_modules: str | list[str] = "all-linear"
+    # TiledMLP configuration for memory-efficient MLP computation
+    tiled_mlp: dict = field(default_factory=lambda: {"enabled": False, "num_shards": 4})

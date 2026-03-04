@@ -192,17 +192,17 @@ class DataParallelPPOCritic(BasePPOCritic):
             batch = data.select(batch_keys=select_keys).batch
             use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
             has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
-
             if has_multi_modal_inputs:
                 num_micro_batches = data.batch.batch_size[0] // micro_batch_size
                 non_tensor_select_keys = ["multi_modal_inputs"]
                 micro_batches = data.select(select_keys, non_tensor_select_keys).chunk(num_micro_batches)
-            elif use_dynamic_bsz:
-                # split using dynamic bsz
-                max_token_len = data.meta_info["max_token_len"] * self.ulysses_sequence_parallel_size
-                micro_batches, indices = rearrange_micro_batches(batch=batch, max_token_len=max_token_len, compute_teacher=compute_teacher)
             else:
-                micro_batches = batch.split(micro_batch_size)
+                if use_dynamic_bsz:
+                    # split using dynamic bsz
+                    max_token_len = data.meta_info["max_token_len"] * self.ulysses_sequence_parallel_size
+                    micro_batches, indices = rearrange_micro_batches(batch=batch, max_token_len=max_token_len, compute_teacher=compute_teacher)
+                else:
+                    micro_batches = batch.split(micro_batch_size)
 
             values_lst = []
             for micro_batch in micro_batches:

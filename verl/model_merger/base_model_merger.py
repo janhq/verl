@@ -24,11 +24,13 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     GenerationConfig,
 )
 
 from verl.utils import hf_processor, hf_tokenizer
+from verl.utils.transformers_compat import get_auto_model_for_vision2seq
+
+AutoModelForVision2Seq = get_auto_model_for_vision2seq()
 
 
 def parse_args():
@@ -202,6 +204,8 @@ class BaseModelMerger(ABC):
                 case "AutoModelForTokenClassification":
                     return AutoModelForTokenClassification
                 case "AutoModelForVision2Seq":
+                    return AutoModelForVision2Seq
+                case "AutoModelForImageTextToText":
                     return AutoModelForVision2Seq
                 case _:
                     raise NotImplementedError(f"Unknown auto class {auto_class}")

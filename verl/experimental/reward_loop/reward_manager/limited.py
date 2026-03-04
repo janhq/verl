@@ -231,7 +231,7 @@ class RateLimitedRewardManager(RewardManagerBase):
 
     Example Configuration:
         >>> config = DictConfig({
-        ...     "reward_model": {
+        ...     "reward": {
         ...         "max_concurrent": 10,      # 10 parallel requests
         ...         "max_rpm": 500,            # 500 requests/minute
         ...         "max_tpm": 100000,         # 100k tokens/minute
@@ -264,18 +264,49 @@ class RateLimitedRewardManager(RewardManagerBase):
     @classmethod
     def init_class(cls, config: DictConfig, tokenizer: AutoTokenizer):
         """Initialize class state shared across all instances."""
-        # Check if already initialized before calling parent
+        # Check if already initialized before calling parent.
+        #
+        # NOTE: This class owns a *global*, class-level set of rate limiters. Once the class has been
+        # initialized, subsequent instantiations cannot change the shared limiters. This is by design,
+        # but it can be surprising (and dangerous) when the first initialization happens with default
+        # values (often "unlimited") and later code tries to apply limits.
         if cls._class_initialized:
+            rm_cfg = config.get("reward") or {}
+            incoming_max_rpm = rm_cfg.get("max_rpm", None)
+            incoming_max_tpm = rm_cfg.get("max_tpm", None)
+
+            # Warn when a caller is trying to change the global RPM/TPM limits after initialization.
+            # This commonly happens if the first instance was created without a config (legacy signature),
+            # which initializes the global limiters to their defaults and locks them in.
+            if (incoming_max_rpm != cls._max_rpm) or (incoming_max_tpm != cls._max_tpm):
+                if (
+                    incoming_max_rpm is not None
+                    or incoming_max_tpm is not None
+                    or cls._max_rpm is not None
+                    or cls._max_tpm is not None
+                ):
+                    logger.warning(
+                        "RateLimitedRewardManager has already been initialized and its rate limiters are shared "
+                        "globally across instances. The incoming (max_rpm/max_tpm) settings will be ignored. "
+                        "This can lead to unexpected behavior (e.g., exceeding API rate limits) if the first "
+                        "initialization used defaults (often unlimited). "
+                        f"Existing: max_rpm={cls._max_rpm}, max_tpm={cls._max_tpm}. "
+                        f"Incoming: max_rpm={incoming_max_rpm}, max_tpm={incoming_max_tpm}. "
+                        "To apply different limits, ensure the first RateLimitedRewardManager created in this "
+                        "process uses the desired configuration (or restart/reset the process)."
+                    )
             return
 
         super().init_class(config, tokenizer)
 
+        rm_cfg = config.get("reward") or {}
+
         # Concurrency limiter
-        cls._max_concurrent = config.reward_model.get("max_concurrent", 1)
+        cls._max_concurrent = rm_cfg.get("max_concurrent", 1)
         cls._semaphore = asyncio.Semaphore(cls._max_concurrent)
 
         # Request rate limiter (RPM)
-        cls._max_rpm = config.reward_model.get("max_rpm", None)
+        cls._max_rpm = rm_cfg.get("max_rpm", None)
         if cls._max_rpm is not None:
             requests_per_second = cls._max_rpm / 60.0
             cls._rpm_limiter = AsyncTokenBucket(rate_limit=requests_per_second, max_tokens=requests_per_second)
@@ -283,8 +314,8 @@ class RateLimitedRewardManager(RewardManagerBase):
             cls._rpm_limiter = None
 
         # Token rate limiter (TPM)
-        cls._max_tpm = config.reward_model.get("max_tpm", None)
-        cls._estimated_tokens_per_request = config.reward_model.get("estimated_tokens_per_request", 2000)
+        cls._max_tpm = rm_cfg.get("max_tpm", None)
+        cls._estimated_tokens_per_request = rm_cfg.get("estimated_tokens_per_request", 2000)
         if cls._max_tpm is not None:
             tokens_per_second = cls._max_tpm / 60.0
             cls._tpm_limiter = AsyncTokenBucket(rate_limit=tokens_per_second, max_tokens=tokens_per_second)
@@ -307,13 +338,31 @@ class RateLimitedRewardManager(RewardManagerBase):
 
         cls._class_initialized = True
 
-    def __init__(self, config, tokenizer, compute_score=None, reward_router_address=None, reward_model_tokenizer=None):
-        super().__init__(config, tokenizer)
+    def __init__(
+        self,
+        config,
+        tokenizer,
+        compute_score,
+        reward_router_address=None,
+        reward_model_tokenizer=None,
+        # Legacy (AbstractRewardManager) kwargs for compatibility. Not used.
+        num_examine: int | None = None,
+        reward_fn_key: str | None = None,
+        **kwargs,
+    ):
+        # When called via the legacy AbstractRewardManager signature, `config` may be absent.
+        # In that case we fall back to an empty config so training can proceed.
+        if config is None:
+            config = DictConfig({"reward": {}})
+        if tokenizer is None:
+            raise TypeError("RateLimitedRewardManager requires `tokenizer`.")
+
+        super().__init__(config, tokenizer, compute_score)
         self.compute_score = compute_score or default_compute_score
         self.is_async_reward_score = inspect.iscoroutinefunction(self.compute_score)
         self.reward_router_address = reward_router_address
         self.reward_model_tokenizer = reward_model_tokenizer
-        self.timeout = config.reward_model.get("timeout", 300.0)
+        self.timeout = config.reward.get("timeout", 300.0)
 
     async def _compute_reward(
         self, data_source: str, solution_str: str, ground_truth: str, extra_info: dict

@@ -63,6 +63,11 @@ def test_vllm_abort():
         print("\n[2] Creating config...")
         from hydra import compose, initialize_config_dir
 
+<<<<<<< HEAD
+=======
+        from verl.utils.tokenizer import normalize_token_ids
+
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
         config_dir = os.path.abspath("verl/verl/trainer/config")
         if not os.path.exists(config_dir):
             config_dir = os.path.abspath("verl/trainer/config")
@@ -121,7 +126,13 @@ def test_vllm_abort():
         all_prompt_ids = []
         for prompt in prompts[:NUM_PROMPTS]:
             messages = [{"role": "user", "content": prompt}]
+<<<<<<< HEAD
             prompt_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+=======
+            prompt_ids = normalize_token_ids(
+                tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+            )
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
             all_prompt_ids.append(prompt_ids)
         print(f"Prepared {NUM_PROMPTS} prompts")
 

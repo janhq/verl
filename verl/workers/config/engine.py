@@ -19,7 +19,6 @@ from typing import Any, Literal, Optional
 from verl.base_config import BaseConfig
 from verl.trainer.config import CheckpointConfig
 
-from ...utils.profiler import ProfilerConfig
 from .model import HFModelConfig
 from .optimizer import OptimizerConfig
 
@@ -274,4 +273,3 @@ class TrainingWorkerConfig(BaseConfig):
     engine_config: EngineConfig = None
     optimizer_config: OptimizerConfig = None
     checkpoint_config: CheckpointConfig = None
-    profiler_config: ProfilerConfig = None

@@ -20,7 +20,6 @@ from tensordict import TensorDict
 from transformers import AutoModelForCausalLM, Qwen3Config
 
 from verl import DataProto
-from verl.utils.device import get_device_name
 from verl.workers.actor.dp_actor import DataParallelPPOActor
 from verl.workers.config import FSDPActorConfig, OptimizerConfig
 
@@ -58,25 +57,17 @@ class TestDataParallelPPOActor(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up distributed environment"""
-        if get_device_name() == "cuda":
-            backend_name = "nccl"
-        elif get_device_name() == "npu":
-            backend_name = "hccl"
-        else:
-            backend_name = "gloo"
-
         if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group(backend=backend_name, init_method="env://")
+            torch.distributed.init_process_group(
+                backend="nccl" if torch.cuda.is_available() else "gloo", init_method="env://"
+            )
 
         cls.rank = torch.distributed.get_rank()
         cls.world_size = torch.distributed.get_world_size()
 
-        if get_device_name() == "cuda":
+        if torch.cuda.is_available():
             torch.cuda.set_device(cls.rank)
             cls.device = torch.device(f"cuda:{cls.rank}")
-        elif get_device_name() == "npu":
-            torch.npu.set_device(cls.rank)
-            cls.device = torch.device(f"npu:{cls.rank}")
         else:
             cls.device = torch.device("cpu")
 
@@ -174,9 +165,7 @@ class TestDataParallelPPOActor(unittest.TestCase):
         """Test compute_log_prob method"""
         data = self._create_test_data_for_compute_log_prob()
 
-        outputs = self.actor.compute_log_prob(data, calculate_entropy=True)
-        log_probs = outputs["log_probs"]
-        entropys = outputs["entropys"]
+        log_probs, entropies = self.actor.compute_log_prob(data, calculate_entropy=True)
 
         batch_size = data.batch["responses"].shape[0]
         response_length = data.batch["responses"].shape[1]
@@ -185,18 +174,16 @@ class TestDataParallelPPOActor(unittest.TestCase):
         self.assertEqual(log_probs.shape, (batch_size, response_length))
         self.assertTrue(torch.all(torch.isfinite(log_probs)))
 
-        self.assertIsInstance(entropys, torch.Tensor)
-        self.assertEqual(entropys.shape, (batch_size, response_length))
-        self.assertTrue(torch.all(torch.isfinite(entropys)))
-        self.assertTrue(torch.all(entropys >= 0))  # Entropy should be non-negative
+        self.assertIsInstance(entropies, torch.Tensor)
+        self.assertEqual(entropies.shape, (batch_size, response_length))
+        self.assertTrue(torch.all(torch.isfinite(entropies)))
+        self.assertTrue(torch.all(entropies >= 0))  # Entropy should be non-negative
 
     def test_compute_log_prob_without_entropy(self):
         """Test compute_log_prob method without entropy calculation"""
         data = self._create_test_data_for_compute_log_prob()
 
-        outputs = self.actor.compute_log_prob(data, calculate_entropy=False)
-        log_probs = outputs["log_probs"]
-        entropys = outputs.get("entropys", None)
+        log_probs, entropies = self.actor.compute_log_prob(data, calculate_entropy=False)
 
         batch_size = data.batch["responses"].shape[0]
         response_length = data.batch["responses"].shape[1]
@@ -204,7 +191,8 @@ class TestDataParallelPPOActor(unittest.TestCase):
         self.assertIsInstance(log_probs, torch.Tensor)
         self.assertEqual(log_probs.shape, (batch_size, response_length))
         self.assertTrue(torch.all(torch.isfinite(log_probs)))
-        self.assertIsNone(entropys)
+
+        self.assertIsNone(entropies)
 
     def test_update_policy(self):
         """Test update_policy method"""
@@ -262,9 +250,7 @@ class TestDataParallelPPOActor(unittest.TestCase):
         qwen_actor = DataParallelPPOActor(config=self.config, actor_module=qwen_model, actor_optimizer=qwen_optimizer)
 
         data = self._create_test_data_for_compute_log_prob()
-        outputs = qwen_actor.compute_log_prob(data, calculate_entropy=True)
-        log_probs = outputs["log_probs"]
-        entropys = outputs["entropys"]
+        log_probs, entropies = qwen_actor.compute_log_prob(data, calculate_entropy=True)
 
         batch_size = data.batch["responses"].shape[0]
         response_length = data.batch["responses"].shape[1]
@@ -273,10 +259,10 @@ class TestDataParallelPPOActor(unittest.TestCase):
         self.assertEqual(log_probs.shape, (batch_size, response_length))
         self.assertTrue(torch.all(torch.isfinite(log_probs)))
 
-        self.assertIsInstance(entropys, torch.Tensor)
-        self.assertEqual(entropys.shape, (batch_size, response_length))
-        self.assertTrue(torch.all(torch.isfinite(entropys)))
-        self.assertTrue(torch.all(entropys >= 0))
+        self.assertIsInstance(entropies, torch.Tensor)
+        self.assertEqual(entropies.shape, (batch_size, response_length))
+        self.assertTrue(torch.all(torch.isfinite(entropies)))
+        self.assertTrue(torch.all(entropies >= 0))
 
         policy_data = self._create_test_data_for_update_policy()
         metrics = qwen_actor.update_policy(policy_data)

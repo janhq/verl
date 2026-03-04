@@ -94,9 +94,6 @@ calculate_entropy: false
 # Whether to use KL loss instead of KL reward penalty. True for GRPO
 use_kl_loss: false
 
-# Whether to enable PrefixGrouper shared-prefix forward
-use_prefix_grouper: false
-
 # Whether to use torch.compile()
 # oc.select: the default val for ref.use_torch_compile
 use_torch_compile: true
@@ -214,12 +211,13 @@ profiler:
       # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
       _target_: verl.utils.profiler.config.TorchProfilerToolConfig
 
-      # Contents to profile, can be empty
-      # options: cuda, cpu, memory, shapes, stack
-      contents: []
+      # start profile mini-batch in training
+      # NOTICE: different with global steps config which refers to iteration
+      # This field only related with mini-batch
+      step_start: 0
 
-      # True for each task has its own database, False for all tasks in one training step share one database.
-      discrete: false
+      # stop profile mini-batch in training
+      step_end: null
 
     # torch memory profiler config
     torch_memory:

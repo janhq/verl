@@ -22,7 +22,6 @@ from verl import DataProto
 from verl.single_controller.base.worker import Worker
 from verl.single_controller.ray import RayWorkerGroup
 from verl.single_controller.ray.base import RayClassWithInitArgs, RayResourcePool
-from verl.utils.device import get_device_name
 
 os.environ["RAY_DEDUP_LOGS"] = "0"
 os.environ["NCCL_DEBUG"] = "WARN"
@@ -60,7 +59,7 @@ def test():
     resource_pool = RayResourcePool([2], use_gpu=True, name_prefix="a")
 
     class_with_args = RayClassWithInitArgs(cls=ModelActor)
-    shard_wg = RayWorkerGroup(resource_pool, class_with_args, device_name=get_device_name())
+    shard_wg = RayWorkerGroup(resource_pool, class_with_args)
 
     test_bs = 8
     test_proto = DataProto(

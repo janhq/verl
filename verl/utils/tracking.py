@@ -22,6 +22,7 @@ from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any
+import orjson
 
 
 class Tracking:
@@ -239,6 +240,17 @@ class FileLogger:
         self.fp = open(self.filepath, "w")
 
     def log(self, data, step):
+        import numpy as np
+        import torch
+        for k,v in data.items():
+            if isinstance(v, np.float64) or isinstance(v, np.float32):
+                data[k] = float(v.tolist())
+            if isinstance(v, np.int64) or isinstance(v, np.int32):
+                data[k] = int(v.tolist())
+            if isinstance(v, np.ndarray):
+                data[k] = float(v.tolist())
+            if isinstance(v, torch.Tensor):
+                data[k] = float(v.item())
         data = {"step": step, "data": data}
         self.fp.write(json.dumps(data) + "\n")
 

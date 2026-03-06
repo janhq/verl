@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from tensordict.tensorclass import NonTensorData
 from torch import nn
+import torch.nn.utils.rnn as rnn
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -33,16 +34,23 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     GenerationConfig,
     MistralForSequenceClassification,
     PretrainedConfig,
     PreTrainedModel,
 )
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:
+    # In transformers v5, use AutoModelForImageTextToText instead
+    AutoModelForVision2Seq = AutoModelForImageTextToText
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from verl.models.registry import ModelRegistry
 from verl.utils.import_utils import is_trl_available
+from verl.utils.transformers_compat import get_auto_model_for_vision2seq
+
+AutoModelForVision2Seq = get_auto_model_for_vision2seq()
 
 
 class LambdaLayer(nn.Module):
@@ -592,7 +600,10 @@ def patch_valuehead_model(model) -> None:
     from types import MethodType
 
     from transformers import PreTrainedModel
-    from trl import AutoModelForCausalLMWithValueHead
+    try:
+        from trl import AutoModelForCausalLMWithValueHead
+    except:
+        from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
 
     def tie_weights(self: "AutoModelForCausalLMWithValueHead") -> None:
         if isinstance(self.pretrained_model, PreTrainedModel):
@@ -619,7 +630,7 @@ def patch_valuehead_model(model) -> None:
 
 
 def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_code):
-    from transformers import AutoModelForCausalLM, AutoModelForTokenClassification, AutoModelForVision2Seq
+    from transformers import AutoModelForCausalLM, AutoModelForTokenClassification
 
     try:
         model = AutoModelForTokenClassification.from_pretrained(
@@ -638,7 +649,10 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
 
     assert is_trl_available()
 
-    from trl import AutoModelForCausalLMWithValueHead
+    try:
+        from trl import AutoModelForCausalLMWithValueHead
+    except:
+        from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
 
     if type(model_config) in AutoModelForVision2Seq._model_mapping.keys():
         module_class = AutoModelForVision2Seq
@@ -708,6 +722,23 @@ def extract_multi_modal_inputs(
         dict[str, torch.Tensor | list[torch.Tensor]]: Processed multi-modal inputs ready for model consumption
 
     """
+    def pad_tensors(tensors):
+        max_len = max(t.shape[-1] for t in tensors)
+
+        padded = []
+        for t in tensors:
+            # Ensure 2D [batch, seq_len]
+            if t.dim() == 1:
+                t = t.unsqueeze(0)
+
+            seq_len = t.shape[-1]
+            if seq_len < max_len:
+                padding = torch.zeros(t.shape[0], max_len - seq_len)
+                t = torch.cat([t, padding], dim=-1)
+            padded.append(t)
+
+        padded = torch.stack(padded).squeeze(-1) if padded[0].shape[0] == 1 else torch.stack(padded)
+        return padded
     multi_modal_inputs = {}
     multi_modal_inputs_collected = {}
     has_image_bound = False
@@ -724,7 +755,7 @@ def extract_multi_modal_inputs(
         if "image_bound" in inputs:
             has_image_bound = True
         for key, value in inputs.items():
-            if value is not None:
+            if value is not None : #and key != "mm_token_type_ids"
                 if key not in multi_modal_inputs_collected:
                     multi_modal_inputs_collected[key] = []
                 multi_modal_inputs_collected[key].append(value)
@@ -733,7 +764,10 @@ def extract_multi_modal_inputs(
         if has_image_bound:  # minicpm-o logic
             multi_modal_inputs[key] = values
         else:
-            multi_modal_inputs[key] = torch.cat(values, dim=0)
+            # print("multi modal input:",key,len(values),"|", str([x.shape for x in values]))
+            # print("multi modal input:",key,len(values),"|", str([x for x in values]))
+
+            multi_modal_inputs[key] = pad_tensors(tensors=values) #torch.cat(values, dim=0)
 
     return multi_modal_inputs
 

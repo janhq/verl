@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any
 import orjson
 
+import orjson
+
 
 class Tracking:
     """A unified tracking interface for logging experiment data to multiple backends.
@@ -87,10 +89,17 @@ class Tracking:
             MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:////tmp/mlruns.db")
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-            # Project_name is actually experiment_name in MLFlow
-            # If experiment does not exist, will create a new experiment
-            experiment = mlflow.set_experiment(project_name)
-            mlflow.start_run(experiment_id=experiment.experiment_id, run_name=experiment_name)
+            # Some cloud providers like Azure ML or Databricks automatically set MLFLOW_RUN_ID
+            # If set, attach to the existing run instead of creating a new one
+            run_id = os.environ.get("MLFLOW_RUN_ID")
+            if run_id:
+                mlflow.start_run(run_id=run_id)
+            else:
+                # Project_name is actually experiment_name in MLFlow
+                # If experiment does not exist, will create a new experiment
+                experiment = mlflow.set_experiment(project_name)
+                mlflow.start_run(experiment_id=experiment.experiment_id, run_name=experiment_name)
+
             mlflow.log_params(_compute_mlflow_params_from_objects(config))
             self.logger["mlflow"] = _MlflowLoggingAdapter()
 
@@ -237,7 +246,7 @@ class FileLogger:
             os.makedirs(directory, exist_ok=True)
             self.filepath = os.path.join(directory, f"{self.experiment_name}.jsonl")
             print(f"Creating file logger at {self.filepath}")
-        self.fp = open(self.filepath, "w")
+        self.fp = open(self.filepath, "wb", buffering=0)
 
     def log(self, data, step):
         import numpy as np
@@ -252,7 +261,7 @@ class FileLogger:
             if isinstance(v, torch.Tensor):
                 data[k] = float(v.item())
         data = {"step": step, "data": data}
-        self.fp.write(json.dumps(data) + "\n")
+        self.fp.write(orjson.dumps(data, option=orjson.OPT_SERIALIZE_NUMPY) + b"\n")
 
     def finish(self):
         self.fp.close()
@@ -426,7 +435,6 @@ class ValidationGenerationsLogger:
         """Log validation generation to mlflow as artifacts"""
         # https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html?highlight=log_artifact#mlflow.log_artifact
 
-        import json
         import tempfile
 
         import mlflow

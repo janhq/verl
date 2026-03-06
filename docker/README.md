@@ -24,7 +24,11 @@ Latest docker file:
 - [Dockerfile.stable.vllm](https://github.com/volcengine/verl/blob/main/docker/Dockerfile.stable.vllm)
 - [Dockerfile.stable.sglang](https://github.com/volcengine/verl/blob/main/docker/Dockerfile.stable.sglang)
 
+<<<<<<< HEAD
 All pre-built images are available in dockerhub: https://hub.docker.com/r/verlai/verl. For example, `verlai/verl:sgl056.latest`, `verlai/verl:vllm012.latest`.
+=======
+All pre-built images are available in dockerhub: https://hub.docker.com/r/verlai/verl. For example, `verlai/verl:sgl056.latest`, `verlai/verl:vllm012.dev3`.
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 
 You can find the latest images used for development and ci in our github workflows:
 - [.github/workflows/vllm.yml](https://github.com/volcengine/verl/blob/main/.github/workflows/vllm.yml)
@@ -62,6 +66,10 @@ pip3 install -e .[sglang]
 
 ## Release History
 
+<<<<<<< HEAD
+=======
+- 2026/01/17: update vllm stable image to torch==2.9.1, cudnn==9.16, deepep==1.2.1
+>>>>>>> ac4ec1b9cb5cedc2a20b1b4d21f1d06b715518f3
 - 2025/12/23: update vllm stable image to vllm==0.12.0; update sglang stable image to sglang==0.5.6
 - 2025/11/18: update vllm stable image to vllm==0.11.1; update sglang stable image to sglang==0.5.5
 

@@ -151,10 +151,10 @@ class DataParallelPPOActor(BasePPOActor):
                 )
 
         multi_modal_inputs = {}
-        if "multi_modal_inputs" in micro_batch.keys():
-            from verl.utils.model import extract_multi_modal_inputs
+        # if "multi_modal_inputs" in micro_batch.keys():
+        #     from verl.utils.model import extract_multi_modal_inputs
 
-            multi_modal_inputs = extract_multi_modal_inputs(micro_batch["multi_modal_inputs"])
+        #     multi_modal_inputs = extract_multi_modal_inputs(micro_batch["multi_modal_inputs"])
 
         with torch.autocast(device_type=self.device_name, dtype=self.param_dtype):
             if compute_teacher:
@@ -583,7 +583,7 @@ class DataParallelPPOActor(BasePPOActor):
         if "rollout_log_probs" in data.batch.keys():
             select_keys.append("rollout_log_probs")
 
-        has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
+        has_multi_modal_inputs = False #"multi_modal_inputs" in data.non_tensor_batch.keys()
         non_tensor_select_keys = []
         if has_multi_modal_inputs:
             non_tensor_select_keys.append("multi_modal_inputs")
@@ -604,6 +604,7 @@ class DataParallelPPOActor(BasePPOActor):
         }
         for _ in range(self.config.ppo_epochs):
             for batch_idx, mini_batch in enumerate(mini_batches):
+                print("batch_idx",batch_idx)
                 if self.config.use_dynamic_bsz:
                     max_token_len = self.config.ppo_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
                     micro_batches, _ = prepare_dynamic_batch(mini_batch, max_token_len=max_token_len)
@@ -615,7 +616,8 @@ class DataParallelPPOActor(BasePPOActor):
 
                 self.actor_optimizer.zero_grad()
 
-                for micro_batch in micro_batches:
+                for micro_batch_idx, micro_batch in enumerate(micro_batches):
+                    # print("micro_batch_idx", micro_batch_idx)
                     micro_batch = micro_batch.to(get_device_id())
                     micro_batch_metrics = {}
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch, "pad_token_id": pad_token_id}
@@ -640,6 +642,7 @@ class DataParallelPPOActor(BasePPOActor):
                         teacher_attention_mask = model_inputs["teacher_attention_mask"]
                         teacher_response_mask = teacher_attention_mask[:, -teacher_response_length:]
                         teacher_outputs = self._forward_micro_batch(micro_batch=model_inputs, compute_teacher=True, temperature=temperature, calculate_entropy=calculate_entropy)
+                        # print("Done forward")
                         teacher_log_prob = teacher_outputs["log_probs"]
                         teacher_entropy = teacher_outputs["entropys"] if calculate_entropy else None
                     elif os.environ.get("TRAIN_GAD") == "ON" and os.environ.get("GAD_MODE") == "HYBRID":

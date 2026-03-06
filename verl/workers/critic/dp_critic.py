@@ -107,6 +107,7 @@ class DataParallelPPOCritic(BasePPOCritic):
                     position_ids=position_ids_rmpad,
                     **multi_modal_inputs,
                     use_cache=False,
+                    # return_dict = True
                 )  # prevent model thinks we are generating
 
                 if hasattr(self.critic_module, "v_head"):
@@ -191,18 +192,18 @@ class DataParallelPPOCritic(BasePPOCritic):
                 select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
             batch = data.select(batch_keys=select_keys).batch
             use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
-            has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
+            has_multi_modal_inputs = False #"multi_modal_inputs" in data.non_tensor_batch.keys()
             if has_multi_modal_inputs:
                 num_micro_batches = data.batch.batch_size[0] // micro_batch_size
                 non_tensor_select_keys = ["multi_modal_inputs"]
                 micro_batches = data.select(select_keys, non_tensor_select_keys).chunk(num_micro_batches)
+            # else:
+            if use_dynamic_bsz:
+                # split using dynamic bsz
+                max_token_len = data.meta_info["max_token_len"] * self.ulysses_sequence_parallel_size
+                micro_batches, indices = rearrange_micro_batches(batch=batch, max_token_len=max_token_len, compute_teacher=compute_teacher)
             else:
-                if use_dynamic_bsz:
-                    # split using dynamic bsz
-                    max_token_len = data.meta_info["max_token_len"] * self.ulysses_sequence_parallel_size
-                    micro_batches, indices = rearrange_micro_batches(batch=batch, max_token_len=max_token_len, compute_teacher=compute_teacher)
-                else:
-                    micro_batches = batch.split(micro_batch_size)
+                micro_batches = batch.split(micro_batch_size)
 
             values_lst = []
             for micro_batch in micro_batches:
@@ -280,7 +281,7 @@ class DataParallelPPOCritic(BasePPOCritic):
                 "teacher_input_ids", "teacher_response", "teacher_attention_mask", "teacher_position_ids"
             ]
             batch = data.select(batch_keys=select_keys).batch
-            has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
+            has_multi_modal_inputs = False #"multi_modal_inputs" in data.non_tensor_batch.keys()
 
             # Split to make minibatch iterator for updating the actor
             # See PPO paper for details. https://arxiv.org/abs/1707.06347
@@ -299,7 +300,7 @@ class DataParallelPPOCritic(BasePPOCritic):
                         num_micro_batches = mini_batch.batch.batch_size[0] // self.config.ppo_micro_batch_size_per_gpu
                         micro_batches = data.select(select_keys, non_tensor_select_keys).chunk(num_micro_batches)
                         self.gradient_accumulation = self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
-                    elif self.config.use_dynamic_bsz:
+                    if self.config.use_dynamic_bsz:
                         max_token_len = self.config.ppo_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
                         # we have both student and teacher here in micro_batches, selected according to student
                         micro_batches, _ = rearrange_micro_batches(batch=mini_batch, max_token_len=max_token_len, compute_teacher=False)

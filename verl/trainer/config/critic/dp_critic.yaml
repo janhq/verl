@@ -23,7 +23,7 @@ defaults:
 _target_: verl.workers.config.FSDPCriticConfig
 
 # distribution strategy. Options: fsdp (deprecating), fsdp2
-strategy: fsdp
+strategy: fsdp2
 
 # model config for the critic
 model:
@@ -41,7 +41,7 @@ model:
   enable_activation_offload: False
 
   # Use remove padding optimization (saves compute)
-  use_remove_padding: False
+  use_remove_padding: True
 
   # Set to positive value to enable LoRA (e.g., 32)
   lora_rank: 0

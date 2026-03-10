@@ -19,7 +19,14 @@ from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
 
-__all__ = ["OptimizerConfig", "FSDPOptimizerConfig", "McoreOptimizerConfig", "build_optimizer", "VeOmniOptimizerConfig"]
+__all__ = [
+    "OptimizerConfig",
+    "FSDPOptimizerConfig",
+    "McoreOptimizerConfig",
+    "MuonOptimizerConfig",
+    "build_optimizer",
+    "VeOmniOptimizerConfig",
+]
 
 
 @dataclass
@@ -143,6 +150,39 @@ class McoreOptimizerConfig(OptimizerConfig):
     override_optimizer_config: Optional[dict] = None
 
 
+@dataclass
+class MuonOptimizerConfig(FSDPOptimizerConfig):
+    """Muon optimizer configuration extending FSDPOptimizerConfig.
+
+    Muon (MomentUm Orthogonalized by Newton-Schulz) is designed for 2D matrix parameters
+    in neural networks. It should be combined with AdamW for non-matrix parameters.
+
+    Reference: https://github.com/KellerJordan/Muon
+
+    Args:
+        optimizer (str): Optimizer class name; default is "MuonWithAdamW".
+        optimizer_impl (str): Module path to import optimizer from; default is "verl.optim.muon".
+        lr (float): Learning rate for Muon (2D parameters); default is 0.02.
+        lr_embedding (float): Learning rate for embeddings/non-matrix parameters; default is 0.2.
+        momentum (float): Momentum factor for Muon; default is 0.95.
+        nesterov (bool): Use Nesterov momentum for Muon; default is True.
+        ns_steps (int): Number of Newton-Schulz iterations for Muon; default is 5.
+        adamw_lr (float): Learning rate for AdamW fallback; default is 3e-4.
+        adamw_betas (tuple[float, float]): AdamW betas; default is (0.9, 0.95).
+        adamw_weight_decay (float): AdamW weight decay; default is 0.1.
+    """
+
+    optimizer: str = "MuonWithAdamW"
+    optimizer_impl: str = "verl.optim.muon"
+    lr_embedding: Optional[float] = None
+    momentum: float = 0.95
+    nesterov: bool = True
+    ns_steps: int = 5
+    adamw_lr: float = 3e-4
+    adamw_betas: tuple[float, float] = (0.9, 0.95)
+    adamw_weight_decay: float = 0.1
+
+
 def build_optimizer(parameters, config: FSDPOptimizerConfig):
     """Build an optimizer based on the configuration.
 
@@ -168,15 +208,57 @@ def build_optimizer(parameters, config: FSDPOptimizerConfig):
         # BitsAndBytes AdamW 8bit
         config.optimizer_impl = "bitsandbytes.optim"
         config.optimizer = "AdamW8bit"
+
+        # Muon optimizer (for 2D params with AdamW fallback)
+        from verl.workers.config import MuonOptimizerConfig
+        config = MuonOptimizerConfig(
+            optimizer="MuonWithAdamW",
+            optimizer_impl="verl.optim.muon",
+            lr=0.02,  # Muon lr
+            lr_embedding=0.2,  # embeddings lr
+            momentum=0.95,
+            nesterov=True,
+            ns_steps=5,
+            adamw_lr=3e-4,
+            adamw_weight_decay=0.1,
+        )
     """
     import importlib
 
+    # Handle Muon optimizer specially (has different arg names)
+    optimizer_name_lower = config.optimizer.lower()
+    if "muon" in optimizer_name_lower:
+        # Muon-specific arguments
+        import verl.optim.muon as muon_module
+        optimizer_cls = getattr(muon_module, config.optimizer)
+
+        muon_args = {
+            "lr": config.lr,
+        }
+
+        if hasattr(config, "lr_embedding") and config.lr_embedding is not None:
+            muon_args["lr_embedding"] = config.lr_embedding
+        if hasattr(config, "momentum"):
+            muon_args["momentum"] = config.momentum
+        if hasattr(config, "nesterov"):
+            muon_args["nesterov"] = config.nesterov
+        if hasattr(config, "ns_steps"):
+            muon_args["ns_steps"] = config.ns_steps
+        if hasattr(config, "adamw_lr"):
+            muon_args["adamw_lr"] = config.adamw_lr
+        if hasattr(config, "adamw_betas"):
+            muon_args["adamw_betas"] = config.adamw_betas
+        if hasattr(config, "adamw_weight_decay"):
+            muon_args["adamw_weight_decay"] = config.adamw_weight_decay
+
+        return optimizer_cls(parameters, **muon_args)
+
+    # Standard optimizer arguments
     optimizer_args = {
         "lr": config.lr,
         "weight_decay": config.weight_decay,
     }
 
-    optimizer_name_lower = config.optimizer.lower()
     if "adam" in optimizer_name_lower or "ademamix" in optimizer_name_lower:
         optimizer_args["betas"] = config.betas
 
